@@ -7,7 +7,7 @@ import torchaudio
 from torch.hub import download_url_to_file
 import numpy as np
 
-dataset_dir = "../TAU-urban-acoustic-scenes-2022-mobile-development/audio"
+dataset_dir = "../../../../raw_files/TAU-urban-acoustic-scenes-2022-mobile-development"
 
 assert dataset_dir is not None, "Specify 'TAU Urban Acoustic Scenes 2022 Mobile dataset' location in variable " \
                                 "'dataset_dir'. The dataset can be downloaded from this URL:" \
