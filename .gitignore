@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+DCASE_Task1/
+split_setup/
+wandb/
+
 # C extensions
 *.so
 
