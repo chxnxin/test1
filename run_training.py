@@ -462,7 +462,7 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='cpu',
+                         accelerator='gpu',
                          devices=1,
                          precision=config.precision,
                          callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
