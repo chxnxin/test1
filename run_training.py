@@ -325,7 +325,35 @@ class PLModule(pl.LightningModule):
         y_hat = self.model(x)
 
         return files, y_hat
+    
+class CNNWithCBAM(nn.Module):
+    def __init__(self):
+        super(CNNWithCBAM, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        
+        # Integrating CBAM after first and second convolution layers
+        self.cbam1 = cbam_module(gate_channels=64, reduction=16, pool_types=['avg', 'max'])
+        self.cbam2 = cbam_module(gate_channels=128, reduction=16, pool_types=['avg', 'max'])
+        
+        self.fc = nn.Linear(128 * 8 * 8, 10)  # Fully connected layer
 
+    def forward(self, x):
+        # First conv layer
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = self.cbam1(x)  # Applying CBAM after the first convolution layer
+
+        # Second conv layer
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.cbam2(x)  # Applying CBAM after the second convolution layer
+
+        # Flatten and Fully Connected Layer
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+    
 class BasicConv(nn.Module):
     def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True, bn=True, bias=False):
         super(BasicConv, self).__init__()
