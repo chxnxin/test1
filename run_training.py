@@ -340,15 +340,16 @@ class CNNWithCBAM(nn.Module):
 
     def forward(self, x):
         # First conv layer
+        # Before each convolution layer
+        x = self.cbam1(x)  # Apply CBAM before convolution
         x = self.conv1(x)
         x = F.relu(x)
-        x = self.cbam1(x)  # Applying CBAM after the first convolution layer
 
         # Second conv layer
+        x = self.cbam2(x)  # Apply CBAM before convolution
         x = self.conv2(x)
         x = F.relu(x)
-        x = self.cbam2(x)  # Applying CBAM after the second convolution layer
-
+        
         # Flatten and Fully Connected Layer
         x = x.view(x.size(0), -1)
         x = self.fc(x)
