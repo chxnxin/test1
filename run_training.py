@@ -469,7 +469,7 @@ def train(config):
     roll_samples = config.orig_sample_rate * config.roll_sec
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
                           worker_init_fn=worker_init_fn,
-                          num_workers=config.num_workers,
+                          num_workers=19,
                           batch_size=config.batch_size,
                           shuffle=True)
 
