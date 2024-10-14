@@ -122,6 +122,8 @@ class PLModule(pl.LightningModule):
         :return: loss to update model parameters
         """
         x, files, labels, devices, cities = train_batch
+        labels = labels.type(torch.LongTensor)
+        labels = labels.to(self.device)
         x = self.mel_forward(x)  # we convert the raw audio signals into log mel spectrograms
 
         if self.config.mixstyle_p > 0:
@@ -143,6 +145,8 @@ class PLModule(pl.LightningModule):
         x, files, labels, devices, cities = val_batch
 
         y_hat = self.forward(x)
+        labels = lables.type(torch.LongTensor)
+        lables = labels.to(self.device)                             
         samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
 
         # for computing accuracy
@@ -222,6 +226,8 @@ class PLModule(pl.LightningModule):
 
     def test_step(self, test_batch, batch_idx):
         x, files, labels, devices, cities = test_batch
+        labels = labels.type(torch.LongTensor)
+        labels = labels.to(self.device)
         
         # maximum memory allowance for parameters: 128 KB
         # baseline has 61148 parameters -> we can afford 16-bit precision
