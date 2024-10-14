@@ -145,8 +145,8 @@ class PLModule(pl.LightningModule):
         x, files, labels, devices, cities = val_batch
 
         y_hat = self.forward(x)
-        labels = lables.type(torch.LongTensor)
-        lables = labels.to(self.device)                             
+        labels = labels.type(torch.LongTensor)
+        labels = labels.to(self.device)
         samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
 
         # for computing accuracy
@@ -228,7 +228,7 @@ class PLModule(pl.LightningModule):
         x, files, labels, devices, cities = test_batch
         labels = labels.type(torch.LongTensor)
         labels = labels.to(self.device)
-        
+
         # maximum memory allowance for parameters: 128 KB
         # baseline has 61148 parameters -> we can afford 16-bit precision
         # since 61148 * 16 bit ~ 122 kB
@@ -598,7 +598,7 @@ if __name__ == '__main__':
     # general
     parser.add_argument('--project_name', type=str, default="DCASE24_Task1")
     parser.add_argument('--experiment_name', type=str, default="Baseline")
-    parser.add_argument('--num_workers', type=int, default=8)  # number of workers for dataloaders
+    parser.add_argument('--num_workers', type=int, default=0)  # number of workers for dataloaders
     parser.add_argument('--precision', type=str, default="32")
 
     # evaluation
