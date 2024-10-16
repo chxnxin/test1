@@ -403,13 +403,13 @@ def train(config):
     # else:
     #     n_workers = 0
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
-                          worker_init_fn=worker_init_fn,
+                        #   worker_init_fn=worker_init_fn,
                           num_workers=config.num_workers,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
-                         worker_init_fn=worker_init_fn,
+                        #  worker_init_fn=worker_init_fn,
                           num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
