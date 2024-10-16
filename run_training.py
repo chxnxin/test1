@@ -10,6 +10,7 @@ import wandb
 import json
 import torch.nn as nn
 import math
+import os
 
 from dataset.dcase24 import get_training_set, get_test_set, get_eval_set
 from helpers.init import worker_init_fn
@@ -397,15 +398,19 @@ def train(config):
     assert config.subset in {100, 50, 25, 10, 5}, "Specify an integer value in: {100, 50, 25, 10, 5} to use one of " \
                                                   "the given subsets."
     roll_samples = config.orig_sample_rate * config.roll_sec
+    if os.name == "posix":
+        n_workers = 4
+    else:
+        n_workers = 0
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
                           worker_init_fn=worker_init_fn,
-                          num_workers=config.num_workers,
+                          num_workers=n_workers,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
-                         num_workers=config.num_workers,
+                         num_workers=n_workers,
                          batch_size=config.batch_size)
 
     # create pytorch lightening module
