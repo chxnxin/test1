@@ -338,6 +338,9 @@ class CNNWithSimAM(nn.Module):
         self.simam1 = simam_module(channels=64)  # SimAM for first layer
         self.simam2 = simam_module(channels=128)  # SimAM for second layer
         
+        # Pooling layers
+        self.pool = nn.MaxPool2d(2, 2)  # Use max pooling to reduce spatial dimensions
+        
         # Fully connected layer
         self.fc = nn.Linear(128 * 8 * 8, 10)  # Adjust dimensions as needed
 
@@ -346,12 +349,14 @@ class CNNWithSimAM(nn.Module):
         x = self.conv1(x)
         x = F.relu(x)
         x = self.simam1(x)  # Apply SimAM after the first convolution layer
+        x = self.pool(x)  # Apply pooling
 
         # Second conv layer
         x = self.conv2(x)
         x = F.relu(x)
         x = self.simam2(x)  # Apply SimAM after the second convolution layer
-
+        x = self.pool(x)  # Apply pooling
+        
         # Flatten and fully connected layer
         x = x.view(x.size(0), -1)
         x = self.fc(x)
