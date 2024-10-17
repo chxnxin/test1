@@ -334,6 +334,28 @@ class CNNWithSimAM(nn.Module):
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         
+        self.channel_attention1 = ChannelAttention(64)  # Channel Attention after first conv layer
+        self.channel_attention2 = ChannelAttention(128)  # Channel Attention after second conv layer
+        
+def __init__(self, channels, reduction=16):
+        super(ChannelAttention, self).__init__()
+        self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
+        self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
+        
+class ChannelAttention(nn.Module):
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        # Global Average Pooling
+        avg_out = F.adaptive_avg_pool2d(x, (1, 1)).view(b, c)
+        # Global Max Pooling
+        max_out = F.adaptive_max_pool2d(x, (1, 1)).view(b, c)
+        # Channel Attention Weights
+        avg_out = self.fc2(F.relu(self.fc1(avg_out)))
+        max_out = self.fc2(F.relu(self.fc1(max_out)))
+        # Combining the two outputs
+        attention = torch.sigmoid(avg_out + max_out).view(b, c, 1, 1)
+        return x * attention  # Apply the attention weights to the input
+
         # Integrate SimAM after each convolutional layer
         self.simam1 = simam_module(channels=64)  # SimAM for first layer
         self.simam2 = simam_module(channels=128)  # SimAM for second layer
@@ -344,19 +366,23 @@ class CNNWithSimAM(nn.Module):
         # Fully connected layer
         self.fc = nn.Linear(128 * 8 * 8, 10)  # Adjust dimensions as needed
 
+
+
     def forward(self, x):
         # First conv layer
         x = self.conv1(x)
         x = F.relu(x)
         x = self.simam1(x)  # Apply SimAM after the first convolution layer
+        x = self.channel_attention1(x)       # Apply Channel Attention
         x = self.pool(x)  # Apply pooling
 
         # Second conv layer
         x = self.conv2(x)
         x = F.relu(x)
         x = self.simam2(x)  # Apply SimAM after the second convolution layer
-        x = self.pool(x)  # Apply pooling
-        
+        x = self.channel_attention1(x)       # Apply Channel Attention
+        x = self.pool(x)  # Apply pooling again
+
         # Flatten and fully connected layer
         x = x.view(x.size(0), -1)
         x = self.fc(x)
