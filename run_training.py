@@ -498,7 +498,7 @@ def train(config):
 
     # final test step
     # here: use the validation split
-    trainer.test(ckpt_path='last', dataloaders=test_dl)
+    trainer.test(ckpt_path='best', dataloaders=test_dl)
 
     wandb.finish()
 
