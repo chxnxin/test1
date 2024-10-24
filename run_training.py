@@ -470,7 +470,6 @@ def train(config):
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
-                         worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
