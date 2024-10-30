@@ -57,7 +57,7 @@ class SpatialAttention(nn.Module):
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x = torch.cat([avg_out, max_out], dim=1)
-        print("Spatial X : {}".format(x.shape))
+        #print("Spatial X : {}".format(x.shape))
         x = self.conv1(x)
         return self.sigmoid(x)
 
