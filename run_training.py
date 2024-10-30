@@ -181,7 +181,7 @@ class PLModule(pl.LightningModule):
         :return: final model predictions
         """
         x = self.mel_forward(x)
-        print("Input shape: {}".format(x.shape))
+        #print("Input shape: {}".format(x.shape))
         x = self.model(x)
         return x
 
