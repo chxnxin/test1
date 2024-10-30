@@ -85,15 +85,15 @@ class CBAMCNN(nn.Module):
     def forward(self, x):
         # First conv layer
         x = self.conv1(x)
-        print("After conv1 : {}".format(x.shape))
+        #print("After conv1 : {}".format(x.shape))
         x = F.relu(x)
-        print("After relu : {}".format(x.shape))
+        #print("After relu : {}".format(x.shape))
         # Applying CBAM after the first convolution layer
         x = self.ca1(x) * x
         x = self.sa1(x) * x
-        print("After cbam1 : {}".format(x.shape))
+        #print("After cbam1 : {}".format(x.shape))
         x = self.pool1(x)
-        print("After Pooling 1 : {}".format(x.shape))
+        #print("After Pooling 1 : {}".format(x.shape))
 
         # Second conv layer
         x = self.conv2(x)
@@ -103,14 +103,14 @@ class CBAMCNN(nn.Module):
         x = self.sa2(x) * x
         x = self.pool2(x)
         
-        print("After Final Pooling : {}".format(x.shape))
+        #print("After Final Pooling : {}".format(x.shape))
 
         # Flatten and Fully Connected Layer
         # x = self.finalpool(x)
         # x = x.squeeze(1)
         
         x = x.view(x.size(0), -1)
-        print("After reshaping : {}".format(x.shape))
+        #print("After reshaping : {}".format(x.shape))
         x = self.fc(x)
         return x 
     
