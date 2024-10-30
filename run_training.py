@@ -18,11 +18,108 @@ from helpers.utils import mixstyle
 from helpers import nessi
 
 
+
+
+        # the baseline model
+        #self.model = get_model(n_classes=config.n_classes,
+        #                       in_channels=config.in_channels,
+        #                       base_channels=config.base_channels,
+        #                        channels_multiplier=config.channels_multiplier,
+        #                       expansion_rate=config.expansion_rate
+        #                       )
+class ChannelAttention(nn.Module):
+    """Channel Attention as proposed in the paper 'Convolutional Block Attention Module'"""
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+           
+        self.fc = nn.Sequential(nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False),
+                               nn.ReLU(),
+                               nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False))
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+ 
+class SpatialAttention(nn.Module):
+    """Spatial Attention as proposed in the paper 'Convolutional Block Attention Module'"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+ 
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        print("Spatial X : {}".format(x.shape))
+        x = self.conv1(x)
+        return self.sigmoid(x)
+
+
+
+class CBAMCNN(nn.Module):
+    def __init__(self):
+        super(CBAMCNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1, stride=1, bias=False)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=1, bias=False)
+        
+        # Integrating CBAM after first and second convolution layers
+        self.ca1 = ChannelAttention(in_planes=64)
+        self.sa1 = SpatialAttention()
+        self.ca2 = ChannelAttention(in_planes=128)
+        self.sa2 = SpatialAttention()
+        
+        # Pooling Layers
+        self.pool1 = nn.AvgPool2d((8,8))
+        self.pool2 = nn.AvgPool2d((8,8))
+        self.finalpool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        self.fc = nn.Linear(128 * 4 * 1, 10)  # Fully connected layer
+
+    def forward(self, x):
+        # First conv layer
+        x = self.conv1(x)
+        print("After conv1 : {}".format(x.shape))
+        x = F.relu(x)
+        print("After relu : {}".format(x.shape))
+        # Applying CBAM after the first convolution layer
+        x = self.ca1(x) * x
+        x = self.sa1(x) * x
+        print("After cbam1 : {}".format(x.shape))
+        x = self.pool1(x)
+        print("After Pooling 1 : {}".format(x.shape))
+
+        # Second conv layer
+        x = self.conv2(x)
+        x = F.relu(x)
+        # Applying CBAM after the second convolution layer
+        x = self.ca2(x) * x
+        x = self.sa2(x) * x
+        x = self.pool2(x)
+        
+        print("After Final Pooling : {}".format(x.shape))
+
+        # Flatten and Fully Connected Layer
+        # x = self.finalpool(x)
+        # x = x.squeeze(1)
+        
+        x = x.view(x.size(0), -1)
+        print("After reshaping : {}".format(x.shape))
+        x = self.fc(x)
+        return x 
+    
 class PLModule(pl.LightningModule):
     def __init__(self, config):
         super().__init__()
         self.config = config  # results from argparse, contains all configurations for our experiment
-
+        
+        
         # module for resampling waveforms on the fly
         resample = torchaudio.transforms.Resample(
             orig_freq=self.config.orig_sample_rate,
@@ -52,14 +149,7 @@ class PLModule(pl.LightningModule):
             freqm,
             timem
         )
-
-        # the baseline model
-        self.model = get_model(n_classes=config.n_classes,
-                               in_channels=config.in_channels,
-                               base_channels=config.base_channels,
-                               channels_multiplier=config.channels_multiplier,
-                               expansion_rate=config.expansion_rate
-                               )
+        self.model = CBAMCNN()  # Replace with own model #TODO 
 
         self.device_ids = ['a', 'b', 'c', 's1', 's2', 's3', 's4', 's5', 's6']
         self.label_ids = ['airport', 'bus', 'metro', 'metro_station', 'park', 'public_square', 'shopping_mall',
@@ -91,6 +181,7 @@ class PLModule(pl.LightningModule):
         :return: final model predictions
         """
         x = self.mel_forward(x)
+        print("Input shape: {}".format(x.shape))
         x = self.model(x)
         return x
 
@@ -326,130 +417,6 @@ class PLModule(pl.LightningModule):
 
         return files, y_hat
     
-class CNNWithCBAM(nn.Module):
-    def __init__(self):
-        super(CNNWithCBAM, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        
-        # Integrating CBAM after first and second convolution layers
-        self.cbam1 = cbam_module(gate_channels=64, reduction=16, pool_types=['avg', 'max'])
-        self.cbam2 = cbam_module(gate_channels=128, reduction=16, pool_types=['avg', 'max'])
-        
-        self.fc = nn.Linear(128 * 8 * 8, 10)  # Fully connected layer
-
-    def forward(self, x):
-        # First conv layer
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.cbam1(x)  # Applying CBAM after the first convolution layer
-
-        # Second conv layer
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = self.cbam2(x)  # Applying CBAM after the second convolution layer
-
-        # Flatten and Fully Connected Layer
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        return x
-    
-class BasicConv(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True, bn=True, bias=False):
-        super(BasicConv, self).__init__()
-        self.out_channels = out_planes
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
-        self.bn = nn.BatchNorm2d(out_planes,eps=1e-5, momentum=0.01, affine=True) if bn else None
-        self.relu = nn.ReLU() if relu else None
-
-    def forward(self, x):
-        x = self.conv(x)
-        if self.bn is not None:
-            x = self.bn(x)
-        if self.relu is not None:
-            x = self.relu(x)
-        return x
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(x.size(0), -1)
-
-class ChannelGate(nn.Module):
-    def __init__(self, gate_channels, reduction_ratio=16, pool_types=['avg', 'max']):
-        super(ChannelGate, self).__init__()
-        self.gate_channels = gate_channels
-        self.mlp = nn.Sequential(
-            Flatten(),
-            nn.Linear(gate_channels, int(gate_channels // reduction_ratio)),
-            nn.ReLU(),
-            nn.Linear(int(gate_channels // reduction_ratio), gate_channels)
-            )
-        self.pool_types = pool_types
-    def forward(self, x):
-        channel_att_sum = None
-        for pool_type in self.pool_types:
-            if pool_type=='avg':
-                avg_pool = F.avg_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( avg_pool )
-            elif pool_type=='max':
-                max_pool = F.max_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( max_pool )
-            elif pool_type=='lp':
-                lp_pool = F.lp_pool2d( x, 2, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( lp_pool )
-            elif pool_type=='lse':
-                # LSE pool only
-                lse_pool = logsumexp_2d(x)
-                channel_att_raw = self.mlp( lse_pool )
-
-            if channel_att_sum is None:
-                channel_att_sum = channel_att_raw
-            else:
-                channel_att_sum = channel_att_sum + channel_att_raw
-
-        scale = F.sigmoid( channel_att_sum ).unsqueeze(2).unsqueeze(3).expand_as(x)
-        return x * scale
-
-def logsumexp_2d(tensor):
-    tensor_flatten = tensor.view(tensor.size(0), tensor.size(1), -1)
-    s, _ = torch.max(tensor_flatten, dim=2, keepdim=True)
-    outputs = s + (tensor_flatten - s).exp().sum(dim=2, keepdim=True).log()
-    return outputs
-
-class ChannelPool(nn.Module):
-    def forward(self, x):
-        return torch.cat( (torch.max(x,1)[0].unsqueeze(1), torch.mean(x,1).unsqueeze(1)), dim=1 )
-
-class SpatialGate(nn.Module):
-    def __init__(self):
-        super(SpatialGate, self).__init__()
-        kernel_size = 7
-        self.compress = ChannelPool()
-        self.spatial = BasicConv(2, 1, kernel_size, stride=1, padding=int((kernel_size-1) // 2), relu=False)
-    def forward(self, x):
-        x_compress = self.compress(x)
-        x_out = self.spatial(x_compress)
-        scale = F.sigmoid(x_out) # broadcasting
-        return x * scale
-
-class cbam_module(nn.Module):
-    def __init__(self, gate_channels, reduction=16, pool_types=['avg', 'max'], no_spatial=False):
-        super(cbam_module, self).__init__()
-        self.ChannelGate = ChannelGate(gate_channels, reduction, pool_types)
-        self.no_spatial=no_spatial
-        if not no_spatial:
-            self.SpatialGate = SpatialGate()
-
-    @staticmethod
-    def get_module_name():
-        return "cbam"
-    
-    def forward(self, x):
-        x_out = self.ChannelGate(x)
-        if not self.no_spatial:
-            x_out = self.SpatialGate(x_out)
-        return x_out
-
 def train(config):
     # logging is done using wandb
     wandb_logger = WandbLogger(
@@ -465,11 +432,13 @@ def train(config):
                                                   "the given subsets."
     roll_samples = config.orig_sample_rate * config.roll_sec
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
-                          num_workers=config.num_workers,
+                          worker_init_fn=worker_init_fn,
+                          num_workers=1,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
+                         worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
@@ -491,14 +460,13 @@ def train(config):
                          accelerator='gpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)]
-                         )
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
     # final test step
     # here: use the validation split
-    trainer.test(ckpt_path='best', dataloaders=test_dl)
+    trainer.test(ckpt_path='last', dataloaders=test_dl)
 
     wandb.finish()
 
