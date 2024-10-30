@@ -432,13 +432,11 @@ def train(config):
                                                   "the given subsets."
     roll_samples = config.orig_sample_rate * config.roll_sec
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
-                          worker_init_fn=worker_init_fn,
-                          num_workers=1,
+                          num_workers=config.num_workers,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
-                         worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
@@ -457,16 +455,16 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='cpu',
+                         accelerator='gpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
     # final test step
     # here: use the validation split
-    trainer.test(ckpt_path='last', dataloaders=test_dl)
+    trainer.test(ckpt_path='best', dataloaders=test_dl)
 
     wandb.finish()
 
