@@ -61,13 +61,24 @@ class SpatialAttention(nn.Module):
         x = self.conv1(x)
         return self.sigmoid(x)
 
-
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False):
+        super(DepthwiseSeparableConv, self).__init__()
+        # Depthwise convolution
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=in_channels, bias=bias)
+        # Pointwise convolution
+        self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
+    
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
 
 class CBAMCNN(nn.Module):
     def __init__(self):
         super(CBAMCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1, stride=1, bias=False)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=1, bias=False)
+        self.conv1 = DepthwiseSeparableConv(1, 64, kernel_size=3, padding=1, stride=1, bias=False)
+        self.conv2 = DepthwiseSeparableConv(64, 128, kernel_size=3, padding=1, stride=1, bias=False)
         
         # Integrating CBAM after first and second convolution layers
         self.ca1 = ChannelAttention(in_planes=64)
