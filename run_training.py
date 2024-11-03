@@ -16,7 +16,7 @@ from helpers.init import worker_init_fn
 from models.baseline import get_model
 from helpers.utils import mixstyle
 from helpers import nessi
-
+from thop import profile, clever_format
 
 
 
@@ -60,7 +60,7 @@ class SpatialAttention(nn.Module):
         #print("Spatial X : {}".format(x.shape))
         x = self.conv1(x)
         return self.sigmoid(x)
-
+ 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False):
         super(DepthwiseSeparableConv, self).__init__()
@@ -68,12 +68,12 @@ class DepthwiseSeparableConv(nn.Module):
         self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=in_channels, bias=bias)
         # Pointwise convolution
         self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
-    
+   
     def forward(self, x):
         x = self.depthwise(x)
         x = self.pointwise(x)
         return x
-
+ 
 class ChannelSELayer(nn.Module):
     """
     Re-implementation of Squeeze-and-Excitation (SE) block described in:
@@ -176,7 +176,7 @@ class ChannelSpatialSELayer(nn.Module):
         """
         output_tensor = torch.add(self.cSE(input_tensor), self.sSE(input_tensor))
         return output_tensor
-
+ 
 class simam_module(torch.nn.Module):
     """
     Re-implementation of the simple attention module (SimAM)
@@ -206,65 +206,250 @@ class simam_module(torch.nn.Module):
         y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2,3], keepdim=True) / n + self.e_lambda)) + 0.5
  
         return x * self.activaton(y)
-    
-class CBAMCNN(nn.Module):
-    def __init__(self):
-        super(CBAMCNN, self).__init__()
-        self.conv1 = DepthwiseSeparableConv(1, 64, kernel_size=3, padding=1, stride=1, bias=False)
-        self.conv2 = DepthwiseSeparableConv(64, 128, kernel_size=3, padding=1, stride=1, bias=False)
-        
-        # Integrating CBAM after first and second convolution layers
-        self.ca1 = ChannelAttention(in_planes=64)
-        self.sa1 = SpatialAttention()
-        self.ca2 = ChannelAttention(in_planes=128)
-        self.sa2 = SpatialAttention()
-        self.cSE1 = ChannelSELayer(num_channels=64)  # Initialize here
-        self.cSE2 = ChannelSELayer(num_channels=128)  # Ensure this is also initialized if used
-        self.simam1 = simam_module(channels=64)  # SIMAM after the first conv layer
-        self.simam2 = simam_module(channels=128)  # SIMAM after the second conv layer
-        
-        # Pooling Layers
-        self.pool1 = nn.AvgPool2d((8,8))
-        self.pool2 = nn.AvgPool2d((8,8))
-        self.finalpool = nn.AdaptiveAvgPool2d((1, 1))
-        
-        self.fc = nn.Linear(128 * 4 * 1, 10)  # Fully connected layer
+
+
+class CBAMBlock(nn.Module):
+    """
+    Convolutional Block Attention Module (CBAM).
+    This module applies both channel and spatial attention to the input feature map.
+    """
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        """
+        Initializes the CBAM module.
+
+        Args:
+            channels (int): Number of input channels.
+            reduction (int): Reduction ratio for channel attention. Default is 16.
+            kernel_size (int): Kernel size for spatial attention. Default is 7.
+        """
+        super(CBAMBlock, self).__init__()
+        # Channel Attention
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, kernel_size=1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, kernel_size=1, bias=False),
+            nn.Sigmoid()
+        )
+        # Spatial Attention
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size//2, bias=False),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
-        # First conv layer
-        x = self.conv1(x)
-        #print("After conv1 : {}".format(x.shape))
-        x = F.relu(x)
-        #print("After relu : {}".format(x.shape))
-        # Applying CBAM after the first convolution layer
-        x = self.ca1(x) * x
-        x = self.sa1(x) * x
-        #print("After cbam1 : {}".format(x.shape))
-        x = self.cSE1(x)  # Channel Squeeze-and-Excitation
-        x = self.simam1(x) # Apply SIMAM right after the first convolution and activation
-        x = self.pool1(x)
-        #print("After Pooling 1 : {}".format(x.shape))
-        
-        # Second conv layer
-        x = self.conv2(x)
-        x = F.relu(x)
-        # Applying CBAM after the second convolution layer
-        x = self.ca2(x) * x
-        x = self.sa2(x) * x
-        x = self.cSE2(x)  # Channel Squeeze-and-Excitation
-        x = self.simam2(x) # Apply SIMAM right after the first convolution and activation
-        x = self.pool2(x)
-        
-        #print("After Final Pooling : {}".format(x.shape))
+        """
+        Forward pass through the CBAM module.
 
-        # Flatten and Fully Connected Layer
-        # x = self.finalpool(x)
-        # x = x.squeeze(1)
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after applying channel and spatial attention.
+        """
+        # Apply Channel Attention
+        ca = self.channel_attention(x)
+        x = x * ca
+
+        # Apply Spatial Attention
+        sa = self.spatial_attention(torch.cat([torch.mean(x, dim=1, keepdim=True),
+                                              torch.max(x, dim=1, keepdim=True)[0]], dim=1))
+        x = x * sa
+
+        return x
+    
+
+
+class ConvBlock(nn.Module):
+    """
+    A Convolutional Block that performs a convolution followed by batch normalization 
+    and a ReLU activation.
+    """
+    def __init__(self, in_channels, out_channels, 
+                 kernel_size=(3, 3), stride=(1, 1), 
+                 padding=(1, 1), add_bias=False):
+        """
+        Initializes the ConvBlock.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            kernel_size (tuple): Size of the convolutional kernel. Default is (3, 3).
+            stride (tuple): Stride of the convolution. Default is (1, 1).
+            padding (tuple): Zero-padding added to both sides of the input. Default is (1, 1).
+            add_bias (bool): If True, adds a learnable bias to the output. Default is False.
+        """
+        super(ConvBlock, self).__init__()
+        self.conv = nn.Conv2d(in_channels=in_channels, 
+                              out_channels=out_channels, 
+                              kernel_size=kernel_size, 
+                              stride=stride, 
+                              padding=padding, 
+                              bias=add_bias)
+        self.bn = nn.BatchNorm2d(out_channels)
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        """
+        Initializes the weights of the convolutional and linear layers.
+        """
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        """
+        Initializes weights based on the layer type.
+
+        Args:
+            m (nn.Module): The module to initialize.
+        """
+        if isinstance(m, nn.Linear):
+            # Xavier Uniform initialization for Linear layers
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Conv2d):
+            # Kaiming Uniform initialization for Conv2d layers
+            nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+        elif isinstance(m, nn.LayerNorm):
+            # Initialize LayerNorm weights and biases
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        """
+        Forward pass through the ConvBlock.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after convolution, batch normalization, and ReLU activation.
+        """
+        x = self.conv(x)
+        x = self.bn(x)
+        x = F.relu_(x)
+        return x
+    
+
+class CBAMCNN(nn.Module):
+    """
+    A 3-Layer Convolutional Neural Network.
+    """
+
+    def __init__(self, num_classes=10, verbose=False):
+        """
+        Initializes the CBAMCNN model. Don't need to change default arguments unless I got the num_classes
+        wrong.
+
+        Args:
+            num_classes (int): Number of output classes. Default is 10.
+            verbose (bool): If True, prints debug statements during forward pass. Default is False.
+        """
+
+        super(CBAMCNN, self).__init__()
+        self.verbose = verbose  # Toggle for debug statements
         
-        x = x.view(x.size(0), -1)
-        #print("After reshaping : {}".format(x.shape))
-        x = self.fc(x)
-        return x 
+        # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
+
+        self.conv1 = ConvBlock(in_channels=1, out_channels=16)
+        self.attention1 = CBAMBlock(channels=16) # Replace w/ other Attention Modules if needed
+        self.maxpool1 = nn.MaxPool2d((4,4))
+
+        self.conv2 = ConvBlock(in_channels=16, out_channels=24,
+                               kernel_size=(5,5), padding="same")
+        self.attention2 = CBAMBlock(channels=24) # Replace w/ other Attention Modules if needed
+        self.maxpool2 = nn.MaxPool2d((2,4))
+        self.dropout1 = nn.Dropout(p=0.2)
+        
+        self.conv3 = ConvBlock(in_channels=24, out_channels=32,
+                               kernel_size=(7,7), padding="same")
+        self.attention3 = CBAMBlock(channels=32) # Replace w/ other Attention Modules if needed
+        self.maxpool3 = nn.MaxPool2d((2,4))
+        
+        # Fully Connected Layers
+        self.fcdropout = nn.Dropout(p=0.2)
+        self.fc1 = nn.Linear(in_features=512,
+                             out_features=num_classes)
+
+
+    def forward(self, x):
+        """
+        Defines the forward pass of the CBAMCNN model.
+
+        Args:
+            x (torch.Tensor): Input tensor with shape (batch_size, 1, height, width).
+
+        Returns:
+            torch.Tensor: Output logits with shape (batch_size, num_classes).
+        """
+
+        # First Convolutional Block
+        x = self.conv1(x)
+        if self.verbose: 
+            print("After conv1 : {}".format(x.shape))
+        x = self.attention1(x)
+        if self.verbose:
+            print("After Attention Module 1 : {}".format(x.shape))
+        x = self.maxpool1(x)
+        if self.verbose: 
+            print("After maxpool1 : {}".format(x.shape))
+
+        # Second Convolutional Block
+        x = self.conv2(x)
+        if self.verbose:
+            print("After conv2 : {}".format(x.shape))
+        x = self.attention2(x)
+        if self.verbose:
+            print("After Attention Module 2 : {}".format(x.shape))
+        x = self.maxpool2(x)
+        if self.verbose:
+            print("After maxpool2 : {}".format(x.shape))
+        x = self.dropout1(x)
+
+        # Third Convolutional Block
+        x = self.conv3(x)
+        if self.verbose: 
+            print("After conv3 : {}".format(x.shape))
+        x = self.attention3(x)
+        if self.verbose:
+            print("After Attention Module 3 : {}".format(x.shape))
+        x = self.maxpool3(x)
+        if self.verbose: 
+            print("After maxpool3 : {}".format(x.shape))
+
+        # Flatten the tensor for the fully connected layers
+        x = torch.flatten(x, 1)  # Flatten all dimensions except batch
+        if self.verbose: 
+            print("After x flatten : {}".format(x.shape))
+
+        # Fully Connected Layers
+        x = self.fcdropout(x)
+        x = self.fc1(x)
+        if self.verbose:
+            print("Final X : {}".format(x.shape))
+        
+        return x
+
+
+
+
+    
+if __name__ == "__main__":
+    # Create a random tensor with shape (batch_size, channels, n_freqs, n_time)
+    input_feature_shape = (1, 1, 256, 65)
+
+    # Initialize the model
+    model = CBAMCNN(verbose=True)
+
+    x = torch.rand((input_feature_shape), device=torch.device("cpu"))
+    y = model(x) # Forward pass
+
+    # Profiling model size and complexity
+    macs, params = profile(model, inputs=(torch.randn(input_feature_shape), ))
+    macs, params = clever_format([macs, params], "%.3f")
+    print("{} MACS and {} Params".format(macs, params))
+    print("Output shape : {}".format(y.shape))
     
 class PLModule(pl.LightningModule):
     def __init__(self, config):
