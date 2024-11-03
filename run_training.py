@@ -176,6 +176,36 @@ class ChannelSpatialSELayer(nn.Module):
         """
         output_tensor = torch.add(self.cSE(input_tensor), self.sSE(input_tensor))
         return output_tensor
+
+class simam_module(torch.nn.Module):
+    """
+    Re-implementation of the simple attention module (SimAM)
+    """
+    def __init__(self, channels = None, e_lambda = 1e-4):
+        super(simam_module, self).__init__()
+ 
+        self.activaton = nn.Sigmoid()
+        self.e_lambda = e_lambda
+ 
+    def __repr__(self):
+        s = self.__class__.__name__ + '('
+        s += ('lambda=%f)' % self.e_lambda)
+        return s
+ 
+    @staticmethod
+    def get_module_name():
+        return "simam"
+ 
+    def forward(self, x):
+ 
+        b, c, h, w = x.size()
+ 
+        n = w * h - 1
+ 
+        x_minus_mu_square = (x - x.mean(dim=[2,3], keepdim=True)).pow(2)
+        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2,3], keepdim=True) / n + self.e_lambda)) + 0.5
+ 
+        return x * self.activaton(y)
     
 class CBAMCNN(nn.Module):
     def __init__(self):
@@ -190,6 +220,8 @@ class CBAMCNN(nn.Module):
         self.sa2 = SpatialAttention()
         self.cSE1 = ChannelSELayer(num_channels=64)  # Initialize here
         self.cSE2 = ChannelSELayer(num_channels=128)  # Ensure this is also initialized if used
+        self.simam1 = simam_module(channels=64)  # SIMAM after the first conv layer
+        self.simam2 = simam_module(channels=128)  # SIMAM after the second conv layer
         
         # Pooling Layers
         self.pool1 = nn.AvgPool2d((8,8))
@@ -209,9 +241,10 @@ class CBAMCNN(nn.Module):
         x = self.sa1(x) * x
         #print("After cbam1 : {}".format(x.shape))
         x = self.cSE1(x)  # Channel Squeeze-and-Excitation
+        x = self.simam1(x) # Apply SIMAM right after the first convolution and activation
         x = self.pool1(x)
         #print("After Pooling 1 : {}".format(x.shape))
-
+        
         # Second conv layer
         x = self.conv2(x)
         x = F.relu(x)
@@ -219,6 +252,7 @@ class CBAMCNN(nn.Module):
         x = self.ca2(x) * x
         x = self.sa2(x) * x
         x = self.cSE2(x)  # Channel Squeeze-and-Excitation
+        x = self.simam2(x) # Apply SIMAM right after the first convolution and activation
         x = self.pool2(x)
         
         #print("After Final Pooling : {}".format(x.shape))
