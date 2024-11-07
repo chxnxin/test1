@@ -388,7 +388,7 @@ class CBAMCNN(nn.Module):
         x = self.conv1(x)
         if self.verbose: 
             print("After conv1 : {}".format(x.shape))
-        x = self.attention1(x) # Comment out if dont want attention
+        #x = self.attention1(x) # Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
@@ -399,7 +399,7 @@ class CBAMCNN(nn.Module):
         x = self.conv2(x)
         if self.verbose:
             print("After conv2 : {}".format(x.shape))
-        x = self.attention2(x)# Comment out if dont want attention
+        #x = self.attention2(x)# Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
@@ -411,7 +411,7 @@ class CBAMCNN(nn.Module):
         x = self.conv3(x)
         if self.verbose: 
             print("After conv3 : {}".format(x.shape))
-        x = self.attention3(x) # Comment out if dont want attention
+        #x = self.attention3(x) # Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
