@@ -489,7 +489,7 @@ class PLModule(pl.LightningModule):
             hop_length=config.hop_length,
             n_mels=config.n_mels,
             f_min=config.f_min,
-            # f_max=config.f_max
+            f_max=config.f_max
         )
 
         # module for resampling waveforms on the fly
@@ -544,8 +544,8 @@ class PLModule(pl.LightningModule):
         x = self.mel(x)
         # print("X mel : {}".format(x.shape))
         if self.training:
-            x = self.mel_augment(x)
-            #x = self.freqmix(x)
+            #x = self.mel_augment(x)
+            x = self.freqmix(x)
         x = (x + 1e-5).log()
         return x
 
