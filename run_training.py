@@ -451,22 +451,22 @@ if __name__ == "__main__":
     print("{} MACS and {} Params".format(macs, params))
     print("Output shape : {}".format(y.shape))
     
-# class FreqMixStyle(nn.Module):
-#     def __init__(self, alpha=0.2):
-#         super(FreqMixStyle, self).__init__()
-#         self.alpha = alpha
+class FreqMixStyle(nn.Module):
+    def __init__(self, alpha=0.2):
+        super(FreqMixStyle, self).__init__()
+        self.alpha = alpha
 
-#     def forward(self, x):
-#         # print("Before mixing:", x.size())  # Printing before mixing
-#         if self.training:
-#             batch_size, channels, freq, time = x.size()
-#             weight = torch.randn((batch_size, 1, freq, 1), device=x.device) * self.alpha
-#             mixed_x = x + weight * x.mean(dim=2, keepdim=True)
-#             # print("After mixing:", mixed_x.size())  # Printing after mixing
+    def forward(self, x):
+        # print("Before mixing:", x.size())  # Printing before mixing
+        if self.training:
+            batch_size, channels, freq, time = x.size()
+            weight = torch.randn((batch_size, 1, freq, 1), device=x.device) * self.alpha
+            mixed_x = x + weight * x.mean(dim=2, keepdim=True)
+            # print("After mixing:", mixed_x.size())  # Printing after mixing
 
-#             return mixed_x
-#         else:
-#             return x
+            return mixed_x
+        else:
+            return x
     
 class PLModule(pl.LightningModule):
     def __init__(self, config):
@@ -544,8 +544,8 @@ class PLModule(pl.LightningModule):
         x = self.mel(x)
         # print("X mel : {}".format(x.shape))
         if self.training:
-            x = self.mel_augment(x)
-            #x = self.freqmix(x)
+            #x = self.mel_augment(x)
+            x = self.freqmix(x)
         x = (x + 1e-5).log()
         return x
 
