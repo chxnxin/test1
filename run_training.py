@@ -474,23 +474,23 @@ class PLModule(pl.LightningModule):
         self.config = config  # results from argparse, contains all configurations for our experiment
         
         
-#     # SpecAugment module initialization
-#         # self.spec_augment = SpecAugment(freq_mask_param=15, time_mask_param=35, num_masks=2)
-#         self.freqmix = FreqMixStyle()
+    # SpecAugment module initialization
+        # self.spec_augment = SpecAugment(freq_mask_param=15, time_mask_param=35, num_masks=2)
+        self.freqmix = FreqMixStyle()
 
-#         # Other transformations
-#         self.resample = torchaudio.transforms.Resample(
-#             orig_freq=config.orig_sample_rate, new_freq=config.sample_rate
-#         )
-#         self.mel = torchaudio.transforms.MelSpectrogram(
-#             sample_rate=config.sample_rate,
-#             n_fft=config.n_fft,
-#             win_length=config.window_length,
-#             hop_length=config.hop_length,
-#             n_mels=config.n_mels,
-#             f_min=config.f_min,
-#             # f_max=config.f_max
-#         )
+        # Other transformations
+        self.resample = torchaudio.transforms.Resample(
+            orig_freq=config.orig_sample_rate, new_freq=config.sample_rate
+        )
+        self.mel = torchaudio.transforms.MelSpectrogram(
+            sample_rate=config.sample_rate,
+            n_fft=config.n_fft,
+            win_length=config.window_length,
+            hop_length=config.hop_length,
+            n_mels=config.n_mels,
+            f_min=config.f_min,
+            # f_max=config.f_max
+        )
 
         # module for resampling waveforms on the fly
         resample = torchaudio.transforms.Resample(
