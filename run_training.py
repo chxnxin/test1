@@ -544,8 +544,8 @@ class PLModule(pl.LightningModule):
         x = self.mel(x)
         # print("X mel : {}".format(x.shape))
         if self.training:
-            #x = self.mel_augment(x)
-            x = self.freqmix(x)
+            x = self.mel_augment(x)
+            #x = self.freqmix(x)
         x = (x + 1e-5).log()
         return x
 
