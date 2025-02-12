@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.models.layers.helpers import to_2tuple
+from timm.models.layers import to_2tuple
 
 from models.helpers.vit_helpers import DropPath, trunc_normal_, build_model_with_cfg
 
