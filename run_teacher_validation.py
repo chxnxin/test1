@@ -23,16 +23,7 @@ class PLModule(pl.LightningModule):
         self.config = config
         import torchaudio
         # module to preprocess waveforms into log mel spectrograms
-        self.mel = torchaudio.transforms.MelSpectrogram(
-            sample_rate=32000,
-            n_fft=4096,
-            win_length=3072,
-            hop_length=750,
-            n_mels=256,
-            f_min=0,
-            f_max=None
-        )
-
+        self.mel = AugmentMelSTFT(**model_config['mel']) # I converted it back to the original settings
 
         get_model_fn = model_config['model_fn']
         self.model = get_model_fn(**model_config["net"])
@@ -55,15 +46,13 @@ class PLModule(pl.LightningModule):
 
     def mel_forward(self, x):
         """
-        :param x: batch of raw audio signals (waveforms)
-        :return: log mel spectrogram
+        @param x: a batch of raw signals (waveform)
+        return: a batch of log mel spectrograms
         """
+        old_shape = x.size()
+        x = x.reshape(-1, old_shape[2])  # for calculating log mel spectrograms we remove the channel dimension
         x = self.mel(x)
-        # print("X mel : {}".format(x.shape))
-        if self.training:
-            x = self.mel_augment(x)
-            #x = self.freqmix(x)
-        x = (x + 1e-5).log()
+        x = x.reshape(old_shape[0], old_shape[1], x.shape[1], x.shape[2])  # batch x channels x mels x time-frames
         return x
 
     def forward(self, x):
@@ -117,7 +106,8 @@ class PLModule(pl.LightningModule):
             results["lblcnt." + self.label_ids[l]] = results["lblcnt." + self.label_ids[l]] + 1
         return results
 
-    def on_validation_epoch_end(self, outputs):
+    # Removed the "on_" prefix + downgraded PyTorch-Lightning on the Server to 1.9.4
+    def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         val_acc = sum([x['n_correct_pred'] for x in outputs]) * 1.0 / sum(x['n_pred'] for x in outputs)
 
@@ -164,7 +154,7 @@ def validate(config, model_config):
 
     # test loader
     test_dl = DataLoader(dataset=get_test_set(),
-                         worker_init_fn=worker_init_fn,
+                         # worker_init_fn=worker_init_fn, # Removed this function cause it causes problems
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
@@ -185,12 +175,12 @@ if __name__ == '__main__':
     # general
     parser.add_argument('--project_name', type=str, default="DCASE23_Task1")
     parser.add_argument('--experiment_name', type=str, default="CPJKU_Teacher_Validation")
-    parser.add_argument('--num_workers', type=int, default=12)  # number of workers for dataloaders
+    parser.add_argument('--num_workers', type=int, default=2)  # number of workers for dataloaders, I reduced from 12 to 2 for the server
 
     # dataset
     # location to store resampled waveform
     parser.add_argument('--cache_path', type=str, default=os.path.join("datasets", "cpath"))
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=256)
 
     # model
     parser.add_argument('--model_name', type=str, default="passt_dirfms_1")
