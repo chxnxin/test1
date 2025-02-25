@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pt
 
 DCASE_Task1/
 split_setup/
