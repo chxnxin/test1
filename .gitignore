@@ -166,3 +166,4 @@ cython_debug/
 #.idea/
 
 ./TAU-urban-acoustic-scenes-2022-mobile-development
+*.pt
