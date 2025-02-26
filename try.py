@@ -601,6 +601,8 @@ class PLModule(pl.LightningModule):
         self.log("epoch", self.current_epoch)
         self.log("train/loss", loss.detach().cpu())
         self.log("epoch", self.current_epoch)
+        self.log("hard_loss", loss_ce, on_step=True, on_epoch=True)
+        self.log("soft_loss", loss_kd, on_step=True, on_epoch=True)
 
         return loss
 
