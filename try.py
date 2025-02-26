@@ -527,7 +527,7 @@ class PLModule(pl.LightningModule):
             x = self.mel_augment(x) # Apply augmentations to the mel spec
             #x = self.freqmix(x)
         x = (x + 1e-5).log()
-        print("X mel : {}".format(x.shape))
+        #print("X mel : {}".format(x.shape))
     
         return x
 
@@ -589,7 +589,7 @@ class PLModule(pl.LightningModule):
             T = self.config.temperature  # temperature for softening
             # Compute softened probabilities
             soft_student = F.log_softmax(student_logits / T, dim=1)
-            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
+            #print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
             soft_teacher = F.softmax(teacher_logits[0] / T, dim=1)
             loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
             # Combine the losses: distillation loss and standard cross-entropy loss
@@ -835,7 +835,7 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='cpu',
+                         accelerator='gpu',
                          devices=1,
                          precision=config.precision,
                          callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
@@ -1020,7 +1020,10 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f"No model configuration for {args.model_name}")
     args.use_teacher = True
-    args.teacher_checkpoint = r"./resources/passt_dirfims_1.pt"
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    checkpoint_path = os.path.join(base_path, "resources", "passt_dirfms_1.pt")
+    print("Teacher Checkpoint: {}".format(checkpoint_path))
+    args.teacher_checkpoint = checkpoint_path
     
     if args.evaluate:
         evaluate(args)
