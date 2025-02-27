@@ -352,18 +352,18 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        #self.attention1 = simam_module(channels=16) # Replace w/ other Attention Modules if needed
+        self.attention1 = simam_module(channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
                                kernel_size=(5,5), padding="same")
         self.attention2 = simam_module(channels=24) # Replace w/ other Attention Modules if needed
-        #self.maxpool2 = nn.MaxPool2d((2,4))
+        self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
                                kernel_size=(7,7), padding="same")
-        #self.attention3 = simam_module(channels=32) # Replace w/ other Attention Modules if needed
+        self.attention3 = simam_module(channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
         # Fully Connected Layers
@@ -387,7 +387,7 @@ class CBAMCNN(nn.Module):
         x = self.conv1(x)
         if self.verbose: 
             print("After conv1 : {}".format(x.shape))
-        x = self.attention1(x)
+        #x = self.attention1(x)
         if self.verbose:
             print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
@@ -398,7 +398,7 @@ class CBAMCNN(nn.Module):
         x = self.conv2(x)
         if self.verbose:
             print("After conv2 : {}".format(x.shape))
-        x = self.attention2(x)
+        #x = self.attention2(x)
         if self.verbose:
             print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
@@ -410,7 +410,7 @@ class CBAMCNN(nn.Module):
         x = self.conv3(x)
         if self.verbose: 
             print("After conv3 : {}".format(x.shape))
-        x = self.attention3(x)
+        #x = self.attention3(x)
         if self.verbose:
             print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
