@@ -352,18 +352,18 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        self.attention1 = simam_module(channels=16) # Replace w/ other Attention Modules if needed
+        #self.attention1 = simam_module(channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
                                kernel_size=(5,5), padding="same")
         self.attention2 = simam_module(channels=24) # Replace w/ other Attention Modules if needed
-        self.maxpool2 = nn.MaxPool2d((2,4))
+        #self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
                                kernel_size=(7,7), padding="same")
-        self.attention3 = simam_module(channels=32) # Replace w/ other Attention Modules if needed
+        #self.attention3 = simam_module(channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
         # Fully Connected Layers
@@ -988,8 +988,8 @@ if __name__ == '__main__':
     # Knowledge distillation arguments:
     parser.add_argument('--use_teacher', action='store_true', help='Enable teacher model for knowledge distillation')
     parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
-    parser.add_argument('--temperature', type=float, default=0.1) # Temperature for Knowledge Distillation
-    parser.add_argument('--distillation_alpha', type=float, default=0.1) # Loss weight for Knowledge Distillation
+    parser.add_argument('--temperature', type=float, default=2) # Temperature for Knowledge Distillation
+    parser.add_argument('--distillation_alpha', type=float, default=0.02) # Loss weight for Knowledge Distillation
     
     # Add other necessary arguments
     args = parser.parse_args()
