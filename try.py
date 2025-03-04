@@ -613,13 +613,8 @@ class PLModule(pl.LightningModule):
             T = self.config.temperature  # temperature for softening
             # Compute softened probabilities
             soft_student = F.log_softmax(student_logits / T, dim=1)
-<<<<<<< HEAD
             #print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
-            soft_teacher = F.softmax(teacher_logits[0] / T, dim=1)
-=======
-            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits.shape))
             soft_teacher = F.softmax(teacher_logits / T, dim=1)
->>>>>>> b5daa742b54170d07ed95e117a9e4f8c75c0ce5d
             loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
             # Combine the losses: distillation loss and standard cross-entropy loss
             loss = self.config.distillation_alpha * loss_kd + (1 - self.config.distillation_alpha) * loss_ce
@@ -1083,14 +1078,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f"No model configuration for {args.model_name}")
     args.use_teacher = True
-<<<<<<< HEAD
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    checkpoint_path = os.path.join(base_path, "resources", "passt_dirfms_1.pt")
-    print("Teacher Checkpoint: {}".format(checkpoint_path))
-    args.teacher_checkpoint = checkpoint_path
-=======
     args.teacher_checkpoint = [args.teacher_checkpoint_1, args.teacher_checkpoint_2]
->>>>>>> b5daa742b54170d07ed95e117a9e4f8c75c0ce5d
     
     if args.evaluate:
         evaluate(args)
