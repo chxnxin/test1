@@ -387,7 +387,7 @@ class CBAMCNN(nn.Module):
         x = self.conv1(x)
         if self.verbose: 
             print("After conv1 : {}".format(x.shape))
-        x = self.attention1(x)
+        #x = self.attention1(x)
         if self.verbose:
             print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
@@ -398,7 +398,7 @@ class CBAMCNN(nn.Module):
         x = self.conv2(x)
         if self.verbose:
             print("After conv2 : {}".format(x.shape))
-        x = self.attention2(x)
+        #x = self.attention2(x)
         if self.verbose:
             print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
@@ -410,7 +410,7 @@ class CBAMCNN(nn.Module):
         x = self.conv3(x)
         if self.verbose: 
             print("After conv3 : {}".format(x.shape))
-        x = self.attention3(x)
+        #x = self.attention3(x)
         if self.verbose:
             print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
@@ -490,17 +490,34 @@ class PLModule(pl.LightningModule):
             # Here we assume that the teacher model has the same architecture as used during teacher training.
             # For instance, if you're using a PaSST teacher, import the teacher model definition:
             from passt import get_model as get_passt_teacher
+            from cp_resnet import get_model as get_cp_resnet_teacher
+            
+             # For the CP‑ResNet teacher, remove the "input_fdim" parameter:
+            cp_resnet_net_config = self.model_config["net"].copy()
+            cp_resnet_net_config.pop("input_fdim", None)  # Remove if it exists
+            cp_resnet_net_config.pop("s_patchout_t", None)  # Remove this key for CP‑ResNet
+            cp_resnet_net_config.pop("s_patchout_f", None)  # And remove this too, if not needed
+
+            
             # Instantiate the teacher model with appropriate parameters:
-            self.teacher_model = get_passt_teacher(**self.model_config["net"])
+            self.teacher_model_1 = get_passt_teacher(**self.model_config["net"])
+            self.teacher_model_2 = get_cp_resnet_teacher(**cp_resnet_net_config)
+
             # Load the pre-trained teacher weights:
-            self.teacher_model.load_state_dict(torch.load(self.config.teacher_checkpoint, map_location='cpu'))
+            self.teacher_model_1.load_state_dict(torch.load(self.config.teacher_checkpoint_1, map_location='cpu'))
+            self.teacher_model_2.load_state_dict(torch.load(self.config.teacher_checkpoint_2, map_location='cpu'))
+
             # Set the teacher to evaluation mode and freeze its parameters:
-            self.teacher_model.eval()
-            for param in self.teacher_model.parameters():
+            self.teacher_model_1.eval()
+            for param in self.teacher_model_1.parameters():
                 param.requires_grad = False
-            print("Teacher Initiated!")
+            self.teacher_model_2.eval()
+            for param in self.teacher_model_2.parameters():
+                param.requires_grad = False
+            print("Both Teachers Initiated!")
         else:
-            self.teacher_model = None
+            self.teacher_model_1 = None
+            self.teacher_model_2 = None
             print("No Teacher at all!")
             
         self.device_ids = ['a', 'b', 'c', 's1', 's2', 's3', 's4', 's5', 's6']
@@ -582,21 +599,28 @@ class PLModule(pl.LightningModule):
         loss_ce = F.cross_entropy(student_logits, labels)
         
         # If a teacher model is provided, compute the distillation loss.
-        if self.teacher_model is not None:
+        if self.teacher_model_1 is not None and self.teacher_model_2 is not None:
             # Use no_grad to ensure teacher is not updated.
             with torch.no_grad():
-                teacher_logits = self.teacher_model(x_teacher)
+                teacher_logits_1 = self.teacher_model_1(x_teacher)
+                teacher_logits_2 = self.teacher_model_2(x_teacher)
+            # Combine the teacher ouputs (average them)
+            if isinstance(teacher_logits_1, tuple):
+                teacher_logits_1 = teacher_logits_1[0]
+            if isinstance(teacher_logits_2, tuple):
+                teacher_logits_2 = teacher_logits_2[0]
+            teacher_logits= (teacher_logits_1 + teacher_logits_2)/2.0
             T = self.config.temperature  # temperature for softening
             # Compute softened probabilities
             soft_student = F.log_softmax(student_logits / T, dim=1)
-            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
-            soft_teacher = F.softmax(teacher_logits[0] / T, dim=1)
+            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits.shape))
+            soft_teacher = F.softmax(teacher_logits / T, dim=1)
             loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
             # Combine the losses: distillation loss and standard cross-entropy loss
             loss = self.config.distillation_alpha * loss_kd + (1 - self.config.distillation_alpha) * loss_ce
         else:
             loss = loss_ce
-
+            
         self.log("lr", self.trainer.optimizers[0].param_groups[0]['lr'])
         self.log("epoch", self.current_epoch)
         self.log("train/loss", loss.detach().cpu())
@@ -990,12 +1014,44 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
     parser.add_argument('--temperature', type=float, default=2) # Temperature for Knowledge Distillation
     parser.add_argument('--distillation_alpha', type=float, default=0.02) # Loss weight for Knowledge Distillation
-    
+    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfims_1.pt", 
+                    help='Path to the first teacher model checkpoint')
+    parser.add_argument('--teacher_checkpoint_2', type=str, default=r"./resources/cpr_128k_dirfims_1.pt", 
+                    help='Path to the second teacher model checkpoint')
+
     # Add other necessary arguments
     args = parser.parse_args()
     from passt import get_model as get_passt
-
+    from cp_resnet import get_model as get_cp_resnet
+    
     # Define the model_config based on the model_name
+    if args.model_name in ["cpr_128k_dirfms_1",
+                           "cpr_128k_dirfms_2",
+                           "cpr_128k_dirfms_3",
+                           "cpr_128k_fms_1",
+                           "cpr_128k_fms_2",
+                           "cpr_128k_fms_3"]:
+        model_config = {
+            "mel": {
+                "sr": 32000,
+                "n_mels": 256,
+                "win_length": 3072,
+                "hopsize": 750,
+                "n_fft": 4096,
+                "fmax": None,
+                "fmax_aug_range": 1000,
+                "fmin": 0,
+                "fmin_aug_range": 1
+            },
+            "net": {
+                # "rho": 8,
+                # "base_channels": 32,
+                # "maxpool_stage1": [1],
+                # "maxpool_kernel": (2, 1),
+                # "maxpool_stride": (2, 1)
+            },
+            "model_fn": get_cp_resnet
+        }
     if args.model_name in ["passt_dirfms_1", "passt_dirfms_2", "passt_dirfms_3", 
                             "passt_fms_1", "passt_fms_2", "passt_fms_3"]:
         model_config = {
@@ -1022,7 +1078,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f"No model configuration for {args.model_name}")
     args.use_teacher = True
-    args.teacher_checkpoint = r"./resources/passt_dirfims_1.pt"
+    args.teacher_checkpoint = [args.teacher_checkpoint_1, args.teacher_checkpoint_2]
     
     if args.evaluate:
         evaluate(args)
