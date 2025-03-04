@@ -1014,9 +1014,9 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
     parser.add_argument('--temperature', type=float, default=2) # Temperature for Knowledge Distillation
     parser.add_argument('--distillation_alpha', type=float, default=0.02) # Loss weight for Knowledge Distillation
-    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfims_1.pt", 
+    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfms_1.pt", 
                     help='Path to the first teacher model checkpoint')
-    parser.add_argument('--teacher_checkpoint_2', type=str, default=r"./resources/cpr_128k_dirfims_1.pt", 
+    parser.add_argument('--teacher_checkpoint_2', type=str, default=r"./resources/cpr_128k_dirfms_1.pt", 
                     help='Path to the second teacher model checkpoint')
 
     # Add other necessary arguments
