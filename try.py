@@ -352,7 +352,7 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        self.attention1 = SpatialSELayerSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
+        self.attention1 = SpatialSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
