@@ -485,7 +485,6 @@ class PLModule(pl.LightningModule):
         )
         self.model = CBAMCNN()  # Replace with own model #TODO 
 
-
         if self.config.use_teacher:
             # Here we assume that the teacher model has the same architecture as used during teacher training.
             # For instance, if you're using a PaSST teacher, import the teacher model definition:
@@ -514,6 +513,10 @@ class PLModule(pl.LightningModule):
             self.teacher_model_2.eval()
             for param in self.teacher_model_2.parameters():
                 param.requires_grad = False
+                
+            if str(self.config.precision) in ["16", "16.0"]:
+                self.teacher_model_1.half()
+                self.teacher_model_2.half()    
             print("Both Teachers Initiated!")
         else:
             self.teacher_model_1 = None
@@ -587,6 +590,8 @@ class PLModule(pl.LightningModule):
         x, files, labels, devices, cities = train_batch
         labels = labels.type(torch.LongTensor)
         labels = labels.to(self.device)
+        bs = labels.size(0)  # Cache batch size
+        
         x_teacher = self.mel_teacher(x) # Convert raw audio into MelSpec for Teacher Model
         x = self.mel_forward(x)  # we convert the raw audio signals into log mel spectrograms
 
@@ -613,23 +618,24 @@ class PLModule(pl.LightningModule):
             T = self.config.temperature  # temperature for softening
             # Compute softened probabilities
             soft_student = F.log_softmax(student_logits / T, dim=1)
-            #print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
+            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits.shape))
             soft_teacher = F.softmax(teacher_logits / T, dim=1)
             loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
             # Combine the losses: distillation loss and standard cross-entropy loss
             loss = self.config.distillation_alpha * loss_kd + (1 - self.config.distillation_alpha) * loss_ce
         else:
             loss = loss_ce
-            
+
         self.log("lr", self.trainer.optimizers[0].param_groups[0]['lr'])
         self.log("epoch", self.current_epoch)
         self.log("train/loss", loss.detach().cpu())
         self.log("epoch", self.current_epoch)
-        self.log("hard_loss", loss_ce, on_step=True, on_epoch=True)
-        self.log("soft_loss", loss_kd, on_step=True, on_epoch=True)
+        self.log("hard_loss", loss_ce, on_step=True, on_epoch=True,batch_size=bs)
+        if self.teacher_model_1 is not None and self.teacher_model_2 is not None:
+            self.log("soft_loss", loss_kd, on_step=True, on_epoch=True,batch_size=bs)
 
         return loss
-
+    
     def on_train_epoch_end(self):
         pass
 
@@ -715,7 +721,10 @@ class PLModule(pl.LightningModule):
         # prefix with 'val' for logging
         self.log_dict({"val/" + k: logs[k] for k in logs})
         self.validation_step_outputs.clear()
-
+        
+    def on_test_epoch_start(self):
+        if not next(self.model.parameters()).dtype == torch.half:
+            self.model.half()
     def test_step(self, test_batch, batch_idx):
         x, files, labels, devices, cities = test_batch
         labels = labels.type(torch.LongTensor)
@@ -726,7 +735,7 @@ class PLModule(pl.LightningModule):
         # since 61148 * 16 bit ~ 122 kB
  
         # assure fp16
-        self.model.half()
+        
         x = self.mel_forward(x)
         x = x.half()
         y_hat = self.model(x)
@@ -829,6 +838,17 @@ def train(config):
         config=vars(config),  # this logs all hyperparameters for us
         name=config.experiment_name
     )
+    
+    roll_samples = config.orig_sample_rate * config.roll_sec
+    train_dl = DataLoader(
+        dataset=get_training_set(config.subset, roll=roll_samples),
+        worker_init_fn=worker_init_fn,
+        num_workers=config.num_workers,
+        batch_size=config.batch_size,
+        shuffle=True,
+        pin_memory=True,  # Optimized for faster host-to-GPU transfer
+        persistent_workers=True if config.num_workers > 0 else False  # Reuse workers across epochs
+    )
 
     # train dataloader
     assert config.subset in {100, 50, 25, 10, 5}, "Specify an integer value in: {100, 50, 25, 10, 5} to use one of " \
@@ -843,8 +863,10 @@ def train(config):
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
-                         batch_size=config.batch_size)
-
+                         batch_size=config.batch_size,        
+                         pin_memory=True,
+                         persistent_workers=True if config.num_workers > 0 else False
+    )
     
     # create pytorch lightening module
     pl_module = PLModule(config, model_config)
@@ -861,7 +883,7 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='gpu',
+                         accelerator='cpu',
                          devices=1,
                          precision=config.precision,
                          callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
@@ -905,7 +927,10 @@ def evaluate(config):
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
-                         batch_size=config.batch_size)
+                         batch_size=config.batch_size, 
+                         pin_memory=True,
+                         persistent_workers=True if config.num_workers > 0 else False
+    )
 
     # get model complexity from nessi
     sample = next(iter(test_dl))[0][0].unsqueeze(0).to(pl_module.device)
