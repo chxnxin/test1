@@ -840,15 +840,15 @@ def train(config):
     )
     
     roll_samples = config.orig_sample_rate * config.roll_sec
-    # train_dl = DataLoader(
-    #     dataset=get_training_set(config.subset, roll=roll_samples),
-    #     worker_init_fn=worker_init_fn,
-    #     num_workers=config.num_workers,
-    #     batch_size=config.batch_size,
-    #     shuffle=True,
-    #     pin_memory=True,  # Optimized for faster host-to-GPU transfer
-    #     persistent_workers=True if config.num_workers > 0 else False  # Reuse workers across epochs
-    # )
+    train_dl = DataLoader(
+        dataset=get_training_set(config.subset, roll=roll_samples),
+        worker_init_fn=worker_init_fn,
+        num_workers=config.num_workers,
+        batch_size=config.batch_size,
+        shuffle=True,
+        pin_memory=True,  # Optimized for faster host-to-GPU transfer
+        persistent_workers=True if config.num_workers > 0 else False  # Reuse workers across epochs
+    )
 
     # train dataloader
     assert config.subset in {100, 50, 25, 10, 5}, "Specify an integer value in: {100, 50, 25, 10, 5} to use one of " \
