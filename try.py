@@ -527,7 +527,7 @@ class PLModule(pl.LightningModule):
             x = self.mel_augment(x) # Apply augmentations to the mel spec
             #x = self.freqmix(x)
         x = (x + 1e-5).log()
-        print("X mel : {}".format(x.shape))
+        #print("X mel : {}".format(x.shape))
     
         return x
 
@@ -589,7 +589,7 @@ class PLModule(pl.LightningModule):
             T = self.config.temperature  # temperature for softening
             # Compute softened probabilities
             soft_student = F.log_softmax(student_logits / T, dim=1)
-            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
+            #print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
             soft_teacher = F.softmax(teacher_logits[0] / T, dim=1)
             loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
             # Combine the losses: distillation loss and standard cross-entropy loss
