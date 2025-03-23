@@ -1022,7 +1022,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f"No model configuration for {args.model_name}")
     args.use_teacher = True
-    args.teacher_checkpoint = r"./resources/passt_dirfims_1.pt"
+    args.teacher_checkpoint = r"./resources/passt_dirfms_1.pt"
     
     if args.evaluate:
         evaluate(args)
