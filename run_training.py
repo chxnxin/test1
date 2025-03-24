@@ -510,6 +510,8 @@ class PLModule(pl.LightningModule):
         if self.training:
             x = self.mel_augment(x)
         x = (x + 1e-5).log()
+        if x.dim() ==3:
+            x = x.unsqueeze(1)
         return x
 
     def forward(self, x):
