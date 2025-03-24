@@ -357,13 +357,13 @@ class CBAMCNN(nn.Module):
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
-                               kernel_size=(5,5), padding=(2,2))
+                               kernel_size=(5,5), padding="same")
         self.attention2 = SpatialSELayer(num_channels=24) # Replace w/ other Attention Modules if needed
         self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
-                               kernel_size=(7,7), padding=(3,3))
+                               kernel_size=(7,7), padding="same")
         self.attention3 = SpatialSELayer(num_channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
@@ -510,8 +510,6 @@ class PLModule(pl.LightningModule):
         if self.training:
             x = self.mel_augment(x)
         x = (x + 1e-5).log()
-        if x.dim() ==3:
-            x = x.unsqueeze(1)
         return x
 
     def forward(self, x):
