@@ -387,47 +387,47 @@ class CBAMCNN(nn.Module):
         # First Convolutional Block
         x = self.conv1(x)
         if self.verbose: 
-            print("After conv1 : {}".format(x.shape))
+            #print("After conv1 : {}".format(x.shape))
         x = self.attention1(x) # Comment out if dont want attention
         if self.verbose:
-            print("After Attention Module 1 : {}".format(x.shape))
+            #print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
         if self.verbose: 
-            print("After maxpool1 : {}".format(x.shape))
+            #print("After maxpool1 : {}".format(x.shape))
 
         # Second Convolutional Block
         x = self.conv2(x)
         if self.verbose:
-            print("After conv2 : {}".format(x.shape))
+            #print("After conv2 : {}".format(x.shape))
         x = self.attention2(x)# Comment out if dont want attention
         if self.verbose:
-            print("After Attention Module 2 : {}".format(x.shape))
+            #print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
         if self.verbose:
-            print("After maxpool2 : {}".format(x.shape))
+            #print("After maxpool2 : {}".format(x.shape))
         x = self.dropout1(x)
 
         # Third Convolutional Block
         x = self.conv3(x)
         if self.verbose: 
-            print("After conv3 : {}".format(x.shape))
+            #print("After conv3 : {}".format(x.shape))
         x = self.attention3(x) # Comment out if dont want attention
         if self.verbose:
-            print("After Attention Module 3 : {}".format(x.shape))
+            #print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
         if self.verbose: 
-            print("After maxpool3 : {}".format(x.shape))
+            #print("After maxpool3 : {}".format(x.shape))
 
         # Flatten the tensor for the fully connected layers
         x = torch.flatten(x, 1)  # Flatten all dimensions except batch
         if self.verbose: 
-            print("After x flatten : {}".format(x.shape))
+            #print("After x flatten : {}".format(x.shape))
 
         # Fully Connected Layers
         x = self.fcdropout(x)
         x = self.fc1(x)
         if self.verbose:
-            print("Final X : {}".format(x.shape))
+            #print("Final X : {}".format(x.shape))
         
         return x
 
