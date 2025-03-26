@@ -796,6 +796,14 @@ class PLModule(pl.LightningModule):
         for k in outputs:
             outputs[k] = torch.stack(outputs[k])
 
+        for k in outputs:
+            # If the first tensor is scalar, stack them.
+            if outputs[k][0].dim() == 0:
+                outputs[k] = torch.stack(outputs[k])
+            else:
+                # Otherwise, concatenate them along the first dimension.
+                outputs[k] = torch.cat(outputs[k])
+            
         avg_loss = outputs['loss'].mean()
         acc = sum(outputs['n_correct']) * 1.0 / sum(outputs['n_pred'])
 
