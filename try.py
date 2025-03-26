@@ -569,8 +569,11 @@ class PLModule(pl.LightningModule):
 
     def training_step(self, train_batch, batch_idx):
         # Unpack the batch and also keep the raw audio for teacher computation.
-        raw_audio, files, labels, devices, cities = train_batch
-        labels = labels.type(torch.LongTensor).to(self.device)
+        if self.config.use_precomputed_teacher_logits:
+            raw_audio, files, labels, devices, cities, teacher_logits = train_batch
+        else:
+            raw_audio, files, labels, devices, cities = train_batch
+            labels = labels.type(torch.LongTensor).to(self.device)
         
         # --- Teacher Logits Caching ---
         # Only compute teacher outputs if teachers are provided.
@@ -844,6 +847,8 @@ class PLModule(pl.LightningModule):
 os.environ["WANDB_MODE"] = "online"
     
 def train(config):
+    config.use_precomputed_teacher_logits = True
+
     # logging is done using wandb
     wandb_logger = WandbLogger(
         project=config.project_name,
@@ -902,7 +907,7 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='cpu',
+                         accelerator='gpu',
                          devices=1,
                          precision=config.precision,
                          callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
