@@ -762,7 +762,9 @@ class PLModule(pl.LightningModule):
 
         dev_names = [d.rsplit("-", 1)[1][:-4] for d in files]
         results = {'loss': samples_loss.mean(), "n_correct": n_correct,
-                   "n_pred": torch.as_tensor(len(labels), device=self.device)}
+                   "n_pred": torch.as_tensor(len(labels), device=self.device),
+                   "preds": preds.cpu(),    # move predictions to CPU for confusion matrix computation
+                    "labels": labels.cpu()}
 
         # log metric per device and scene
         for d in self.device_ids:
@@ -827,6 +829,36 @@ class PLModule(pl.LightningModule):
         logs["macro_avg_acc"] = torch.mean(torch.stack([logs["acc." + l] for l in self.label_ids]))
         # prefix with 'test' for logging
         self.log_dict({"test/" + k: logs[k] for k in logs})
+        self.test_step_outputs.clear()
+        
+        # === NEW: Compute the confusion matrix ===
+        # Loop over the saved test outputs to collect predictions and labels.
+        all_preds = []
+        all_labels = []
+        for out in self.test_step_outputs:
+            all_preds.append(out["preds"])
+            all_labels.append(out["labels"])
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+        
+        # Convert tensors to NumPy arrays for scikit-learn.
+        all_preds_np = all_preds.numpy()
+        all_labels_np = all_labels.numpy()
+        
+        # Compute the confusion matrix.
+        conf_mat = confusion_matrix(all_labels_np, all_preds_np)
+        print("Confusion Matrix:")
+        print(conf_mat)
+        
+        # Optionally log the confusion matrix (e.g., via WandB).
+        if hasattr(self, 'logger') and self.logger is not None:
+            self.logger.experiment.log({"confusion_matrix": conf_mat.tolist()})
+        
+        # Save confusion matrix if needed.
+        self.conf_mat = conf_mat
+        # ================================================
+        
+        # Finally, clear the test outputs for the next epoch/test run.
         self.test_step_outputs.clear()
 
     def predict_step(self, eval_batch, batch_idx, dataloader_idx=0):
