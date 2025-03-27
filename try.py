@@ -846,8 +846,11 @@ class PLModule(pl.LightningModule):
         for out in self.test_step_outputs:
             all_preds.append(out["preds"])
             all_labels.append(out["labels"])
-        all_preds = torch.cat(all_preds)
-        all_labels = torch.cat(all_labels)
+        # Only compute if we have collected outputs.
+        if len(all_preds) > 0:
+            all_preds = torch.cat(all_preds, dim=0)
+            all_labels = torch.cat(all_labels, dim=0)
+        
         
         # Convert tensors to NumPy arrays for scikit-learn.
         all_preds_np = all_preds.numpy()
@@ -865,9 +868,9 @@ class PLModule(pl.LightningModule):
         # Save confusion matrix if needed.
         self.conf_mat = conf_mat
         # ================================================
-        
         # Finally, clear the test outputs for the next epoch/test run.
         self.test_step_outputs.clear()
+        
 
     def predict_step(self, eval_batch, batch_idx, dataloader_idx=0):
         x, files = eval_batch
