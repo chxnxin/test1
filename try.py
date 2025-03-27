@@ -793,13 +793,31 @@ class PLModule(pl.LightningModule):
         self.test_step_outputs.append(results)
 
     def on_test_epoch_end(self):
-        # convert a list of dicts to a flattened dict
+        # Convert a list of dicts to a flattened dict.
         outputs = {k: [] for k in self.test_step_outputs[0]}
         for step_output in self.test_step_outputs:
-            for k in step_output:
-                outputs[k].append(step_output[k])
+            for k, v in step_output.items():
+                outputs[k].append(v)
+        
+        # For each key, if the tensors are scalars (0-dim), stack them.
+        # Otherwise, pad them to the maximum length along dimension 0 and then stack.
         for k in outputs:
-            outputs[k] = torch.stack(outputs[k])
+            if outputs[k][0].dim() == 0:
+                outputs[k] = torch.stack(outputs[k])
+            else:
+                # Determine the maximum length along the first dimension.
+                max_length = max(t.shape[0] for t in outputs[k])
+                padded_tensors = []
+                for t in outputs[k]:
+                    if t.shape[0] < max_length:
+                        pad_size = max_length - t.shape[0]
+                        # For a 1D tensor, F.pad expects a tuple (pad_left, pad_right)
+                        padded = F.pad(t, (0, pad_size))
+                    else:
+                        padded = t
+                    padded_tensors.append(padded)
+                outputs[k] = torch.stack(padded_tensors)
+    
 
         avg_loss = outputs['loss'].mean()
         acc = sum(outputs['n_correct']) * 1.0 / sum(outputs['n_pred'])
