@@ -353,18 +353,18 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        self.attention1 = ChannelSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
+        self.attention1 = CBAMBlock(channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
                                kernel_size=(5,5), padding="same")
-        self.attention2 = ChannelSELayer(num_channels=24) # Replace w/ other Attention Modules if needed
+        self.attention2 = CBAMBlock(channels=24) # Replace w/ other Attention Modules if needed
         self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
                                kernel_size=(7,7), padding="same")
-        self.attention3 = ChannelSELayer(num_channels=32) # Replace w/ other Attention Modules if needed
+        self.attention3 = CBAMBlock(channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
         # Fully Connected Layers
@@ -762,9 +762,7 @@ class PLModule(pl.LightningModule):
 
         dev_names = [d.rsplit("-", 1)[1][:-4] for d in files]
         results = {'loss': samples_loss.mean(), "n_correct": n_correct,
-                   "n_pred": torch.as_tensor(len(labels), device=self.device),
-                   "preds": preds.cpu(),    # move predictions to CPU for confusion matrix computation
-                    "labels": labels.cpu()}
+                   "n_pred": torch.as_tensor(len(labels), device=self.device)}
 
         # log metric per device and scene
         for d in self.device_ids:
@@ -796,14 +794,6 @@ class PLModule(pl.LightningModule):
         for k in outputs:
             outputs[k] = torch.stack(outputs[k])
 
-        for k in outputs:
-            # If the first tensor is scalar, stack them.
-            if outputs[k][0].dim() == 0:
-                outputs[k] = torch.stack(outputs[k])
-            else:
-                # Otherwise, concatenate them along the first dimension.
-                outputs[k] = torch.cat(outputs[k])
-            
         avg_loss = outputs['loss'].mean()
         acc = sum(outputs['n_correct']) * 1.0 / sum(outputs['n_pred'])
 
@@ -838,39 +828,6 @@ class PLModule(pl.LightningModule):
         # prefix with 'test' for logging
         self.log_dict({"test/" + k: logs[k] for k in logs})
         self.test_step_outputs.clear()
-        
-        # === NEW: Compute the confusion matrix ===
-        # Loop over the saved test outputs to collect predictions and labels.
-        all_preds = []
-        all_labels = []
-        for out in self.test_step_outputs:
-            all_preds.append(out["preds"])
-            all_labels.append(out["labels"])
-        # Only compute if we have collected outputs.
-        if len(all_preds) > 0:
-            all_preds = torch.cat(all_preds, dim=0)
-            all_labels = torch.cat(all_labels, dim=0)
-        
-        
-        # Convert tensors to NumPy arrays for scikit-learn.
-        all_preds_np = all_preds.numpy()
-        all_labels_np = all_labels.numpy()
-        
-        # Compute the confusion matrix.
-        conf_mat = confusion_matrix(all_labels_np, all_preds_np)
-        print("Confusion Matrix:")
-        print(conf_mat)
-        
-        # Optionally log the confusion matrix (e.g., via WandB).
-        if hasattr(self, 'logger') and self.logger is not None:
-            self.logger.experiment.log({"confusion_matrix": conf_mat.tolist()})
-        
-        # Save confusion matrix if needed.
-        self.conf_mat = conf_mat
-        # ================================================
-        # Finally, clear the test outputs for the next epoch/test run.
-        self.test_step_outputs.clear()
-        
 
     def predict_step(self, eval_batch, batch_idx, dataloader_idx=0):
         x, files = eval_batch
