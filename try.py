@@ -918,10 +918,7 @@ def train(config):
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
-                         batch_size=config.batch_size,        
-                         pin_memory=True,
-                         persistent_workers=True if config.num_workers > 0 else False
-)
+                         batch_size=config.batch_size)
 
     
     # create pytorch lightening module
@@ -1068,7 +1065,7 @@ if __name__ == '__main__':
     parser.add_argument('--expansion_rate', type=float, default=2.1)
 
     # training
-    parser.add_argument('--n_epochs', type=int, default=150)
+    parser.add_argument('--n_epochs', type=int, default=2)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--mixstyle_p', type=float, default=0.4)  # frequency mixstyle
     parser.add_argument('--mixstyle_alpha', type=float, default=0.3)
