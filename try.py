@@ -1,7 +1,3 @@
-channel  attention 
-6 resnet 
-madd 30
-memory 128
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch
