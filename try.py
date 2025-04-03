@@ -10,75 +10,542 @@ import wandb
 import json
 import torch.nn as nn
 import math
+import librosa
+import torch.nn as nn
+import matplotlib.pyplot as plt
+import torchaudio.transforms as T
+from torch.utils.data import Dataset
+import os
 
 from dataset.dcase24 import get_training_set, get_test_set, get_eval_set
 from helpers.init import worker_init_fn
 from models.baseline import get_model
 from helpers.utils import mixstyle
 from helpers import nessi
+from thop import profile, clever_format
 
+
+
+
+class ChannelAttention(nn.Module):
+    """Channel Attention as proposed in the paper 'Convolutional Block Attention Module'"""
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+           
+        self.fc = nn.Sequential(nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False),
+                               nn.ReLU(),
+                               nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False))
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+ 
+class SpatialAttention(nn.Module):
+    """Spatial Attention as proposed in the paper 'Convolutional Block Attention Module'"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+ 
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        #print("Spatial X : {}".format(x.shape))
+        x = self.conv1(x)
+        return self.sigmoid(x)
+ 
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False):
+        super(DepthwiseSeparableConv, self).__init__()
+        # Depthwise convolution
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=in_channels, bias=bias)
+        # Pointwise convolution
+        self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
+   
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+ 
+class ChannelSELayer(nn.Module):
+    """
+    Re-implementation of Squeeze-and-Excitation (SE) block described in:
+        *Hu et al., Squeeze-and-Excitation Networks, arXiv:1709.01507*
+ 
+    """
+ 
+    def __init__(self, num_channels, reduction_ratio=2):
+        """
+        :param num_channels: No of input channels
+        :param reduction_ratio: By how much should the num_channels should be reduced
+        """
+        super(ChannelSELayer, self).__init__()
+        num_channels_reduced = num_channels // reduction_ratio
+        self.reduction_ratio = reduction_ratio
+        self.fc1 = nn.Linear(num_channels, num_channels_reduced, bias=True)
+        self.fc2 = nn.Linear(num_channels_reduced, num_channels, bias=True)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, input_tensor):
+        """
+ 
+        :param input_tensor: X, shape = (batch_size, num_channels, H, W)
+        :return: output tensor
+        """
+        batch_size, num_channels, H, W = input_tensor.size()
+        # Average along each channel
+        squeeze_tensor = input_tensor.view(batch_size, num_channels, -1).mean(dim=2)
+ 
+        # channel excitation
+        fc_out_1 = self.relu(self.fc1(squeeze_tensor))
+        fc_out_2 = self.sigmoid(self.fc2(fc_out_1))
+ 
+        a, b = squeeze_tensor.size()
+        output_tensor = torch.mul(input_tensor, fc_out_2.view(a, b, 1, 1))
+        return output_tensor
+ 
+ 
+class SpatialSELayer(nn.Module):
+    """
+    Re-implementation of SE block -- squeezing spatially and exciting channel-wise described in:
+        *Roy et al., Concurrent Spatial and Channel Squeeze & Excitation in Fully Convolutional Networks, MICCAI 2018*
+    """
+ 
+    def __init__(self, num_channels):
+        """
+ 
+        :param num_channels: No of input channels
+        """
+        super(SpatialSELayer, self).__init__()
+        self.conv = nn.Conv2d(num_channels, 1, 1)
+        self.sigmoid = nn.Sigmoid()
+ 
+    def forward(self, input_tensor, weights=None):
+        """
+ 
+        :param weights: weights for few shot learning
+        :param input_tensor: X, shape = (batch_size, num_channels, H, W)
+        :return: output_tensor
+        """
+        # spatial squeeze
+        batch_size, channel, a, b = input_tensor.size()
+ 
+        if weights is not None:
+            weights = torch.mean(weights, dim=0)
+            weights = weights.view(1, channel, 1, 1)
+            out = F.conv2d(input_tensor, weights)
+        else:
+            out = self.conv(input_tensor)
+        squeeze_tensor = self.sigmoid(out)
+ 
+        # spatial excitation
+        squeeze_tensor = squeeze_tensor.view(batch_size, 1, a, b)
+        output_tensor = torch.mul(input_tensor, squeeze_tensor)
+        return output_tensor
+ 
+ 
+class ChannelSpatialSELayer(nn.Module):
+    """
+    Re-implementation of concurrent spatial and channel squeeze & excitation:
+        *Roy et al., Concurrent Spatial and Channel Squeeze & Excitation in Fully Convolutional Networks, MICCAI 2018, arXiv:1803.02579*
+    """
+ 
+    def __init__(self, num_channels, reduction_ratio=4):
+        """
+ 
+        :param num_channels: No of input channels
+        :param reduction_ratio: By how much should the num_channels should be reduced
+        """
+        super(ChannelSpatialSELayer, self).__init__()
+        self.cSE = ChannelSELayer(num_channels, reduction_ratio)
+        self.sSE = SpatialSELayer(num_channels)
+ 
+    def forward(self, input_tensor):
+        """
+ 
+        :param input_tensor: X, shape = (batch_size, num_channels, H, W)
+        :return: output_tensor
+        """
+        output_tensor = torch.add(self.cSE(input_tensor), self.sSE(input_tensor))
+        return output_tensor
+ 
+class simam_module(torch.nn.Module):
+    """
+    Re-implementation of the simple attention module (SimAM)
+    """
+    def __init__(self, channels = None, e_lambda = 1e-4):
+        super(simam_module, self).__init__()
+ 
+        self.activaton = nn.Sigmoid()
+        self.e_lambda = e_lambda
+ 
+    def __repr__(self):
+        s = self.__class__.__name__ + '('
+        s += ('lambda=%f)' % self.e_lambda)
+        return s
+ 
+    @staticmethod
+    def get_module_name():
+        return "simam"
+ 
+    def forward(self, x):
+ 
+        b, c, h, w = x.size()
+ 
+        n = w * h - 1
+ 
+        x_minus_mu_square = (x - x.mean(dim=[2,3], keepdim=True)).pow(2)
+        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2,3], keepdim=True) / n + self.e_lambda)) + 0.5
+ 
+        return x * self.activaton(y)
+
+
+class CBAMBlock(nn.Module):
+    """
+    Convolutional Block Attention Module (CBAM).
+    This module applies both channel and spatial attention to the input feature map.
+    """
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        """
+        Initializes the CBAM module.
+
+        Args:
+            channels (int): Number of input channels.
+            reduction (int): Reduction ratio for channel attention. Default is 16.
+            kernel_size (int): Kernel size for spatial attention. Default is 7.
+        """
+        super(CBAMBlock, self).__init__()
+        # Channel Attention
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, kernel_size=1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, kernel_size=1, bias=False),
+            nn.Sigmoid()
+        )
+        # Spatial Attention
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size//2, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        """
+        Forward pass through the CBAM module.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after applying channel and spatial attention.
+        """
+        # Apply Channel Attention
+        ca = self.channel_attention(x)
+        x = x * ca
+
+        # Apply Spatial Attention
+        sa = self.spatial_attention(torch.cat([torch.mean(x, dim=1, keepdim=True),
+                                              torch.max(x, dim=1, keepdim=True)[0]], dim=1))
+        x = x * sa
+
+        return x
+    
+
+
+class ConvBlock(nn.Module):
+    """
+    A Convolutional Block that performs a convolution followed by batch normalization 
+    and a ReLU activation.
+    """
+    def __init__(self, in_channels, out_channels, 
+                 kernel_size=(3, 3), stride=(1, 1), 
+                 padding=(1, 1), add_bias=False):
+        """
+        Initializes the ConvBlock.
+
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            kernel_size (tuple): Size of the convolutional kernel. Default is (3, 3).
+            stride (tuple): Stride of the convolution. Default is (1, 1).
+            padding (tuple): Zero-padding added to both sides of the input. Default is (1, 1).
+            add_bias (bool): If True, adds a learnable bias to the output. Default is False.
+        """
+        super(ConvBlock, self).__init__()
+        self.conv = nn.Conv2d(in_channels=in_channels, 
+                              out_channels=out_channels, 
+                              kernel_size=kernel_size, 
+                              stride=stride, 
+                              padding=padding, 
+                              bias=add_bias)
+        self.bn = nn.BatchNorm2d(out_channels)
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        """
+        Initializes the weights of the convolutional and linear layers.
+        """
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        """
+        Initializes weights based on the layer type.
+
+        Args:
+            m (nn.Module): The module to initialize.
+        """
+        if isinstance(m, nn.Linear):
+            # Xavier Uniform initialization for Linear layers
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Conv2d):
+            # Kaiming Uniform initialization for Conv2d layers
+            nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+        elif isinstance(m, nn.LayerNorm):
+            # Initialize LayerNorm weights and biases
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        """
+        Forward pass through the ConvBlock.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after convolution, batch normalization, and ReLU activation.
+        """
+        x = self.conv(x)
+        x = self.bn(x)
+        x = F.relu_(x)
+        return x
+    
+
+class CBAMCNN(nn.Module):
+    """
+    A 3-Layer Convolutional Neural Network.
+    """
+
+    def __init__(self, num_classes=10, verbose=False):
+        """
+        Initializes the CBAMCNN model. Don't need to change default arguments unless I got the num_classes
+        wrong.
+
+        Args:
+            num_classes (int): Number of output classes. Default is 10.
+            verbose (bool): If True, prints debug statements during forward pass. Default is False.
+        """
+
+        super(CBAMCNN, self).__init__()
+        self.verbose = verbose  # Toggle for debug statements
+        
+        # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
+
+        self.conv1 = ConvBlock(in_channels=1, out_channels=16)
+        self.attention1 = SpatialSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
+        self.maxpool1 = nn.MaxPool2d((4,4))
+
+        self.conv2 = ConvBlock(in_channels=16, out_channels=24,
+                               kernel_size=(5,5), padding="same")
+        self.attention2 = SpatialSELayer(num_channels=24) # Replace w/ other Attention Modules if needed
+        self.maxpool2 = nn.MaxPool2d((2,4))
+        self.dropout1 = nn.Dropout(p=0.2)
+        
+        self.conv3 = ConvBlock(in_channels=24, out_channels=32,
+                               kernel_size=(7,7), padding="same")
+        self.attention3 = SpatialSELayer(num_channels=32) # Replace w/ other Attention Modules if needed
+        self.maxpool3 = nn.MaxPool2d((2,4))
+        
+        # Fully Connected Layers
+        self.fcdropout = nn.Dropout(p=0.2)
+        self.fc1 = nn.Linear(in_features=512,
+                             out_features=num_classes)
+
+
+    def forward(self, x):
+        """
+        Defines the forward pass of the CBAMCNN model.
+
+        Args:
+            x (torch.Tensor): Input tensor with shape (batch_size, 1, height, width).
+
+        Returns:
+            torch.Tensor: Output logits with shape (batch_size, num_classes).
+        """
+
+        # First Convolutional Block
+        x = self.conv1(x)
+        if self.verbose: 
+            print("After conv1 : {}".format(x.shape))
+        x = self.attention1(x)
+        if self.verbose:
+            print("After Attention Module 1 : {}".format(x.shape))
+        x = self.maxpool1(x)
+        if self.verbose: 
+            print("After maxpool1 : {}".format(x.shape))
+
+        # Second Convolutional Block
+        x = self.conv2(x)
+        if self.verbose:
+            print("After conv2 : {}".format(x.shape))
+        x = self.attention2(x)
+        if self.verbose:
+            print("After Attention Module 2 : {}".format(x.shape))
+        x = self.maxpool2(x)
+        if self.verbose:
+            print("After maxpool2 : {}".format(x.shape))
+        x = self.dropout1(x)
+
+        # Third Convolutional Block
+        x = self.conv3(x)
+        if self.verbose: 
+            print("After conv3 : {}".format(x.shape))
+        x = self.attention3(x)
+        if self.verbose:
+            print("After Attention Module 3 : {}".format(x.shape))
+        x = self.maxpool3(x)
+        if self.verbose: 
+            print("After maxpool3 : {}".format(x.shape))
+
+        # Flatten the tensor for the fully connected layers
+        x = torch.flatten(x, 1)  # Flatten all dimensions except batch
+        if self.verbose: 
+            print("After x flatten : {}".format(x.shape))
+
+        # Fully Connected Layers
+        x = self.fcdropout(x)
+        x = self.fc1(x)
+        if self.verbose:
+            print("Final X : {}".format(x.shape))
+        
+        return x
+
+class DistillationDataset(Dataset):
+    def __init__(self, original_dataset, teacher_logits):
+        """
+        original_dataset: your existing dataset (e.g., from get_training_set)
+        teacher_logits: precomputed teacher outputs loaded from disk
+        """
+        self.original_dataset = original_dataset
+        self.teacher_logits = teacher_logits
+
+    def __getitem__(self, idx):
+        x, label, *rest = self.original_dataset[idx]
+        # Ensure teacher_logits is indexed correctly:
+        teacher_logit = self.teacher_logits[idx]
+        return x, files, labels, devices, cities, teacher_logit
+
+    def __len__(self):
+        return len(self.original_dataset)
+
+import torch
+import torch.nn.functional as F
+import pytorch_lightning as pl
+import torchaudio
+import transformers
+import h5py  # for saving teacher logits in HDF5 format
 
 class PLModule(pl.LightningModule):
-    def __init__(self, config):
+    def __init__(self, config, model_config):
         super().__init__()
-        self.config = config  # results from argparse, contains all configurations for our experiment
+        self.config = config
+        self.model_config = model_config
 
-        # module for resampling waveforms on the fly
-        resample = torchaudio.transforms.Resample(
-            orig_freq=self.config.orig_sample_rate,
-            new_freq=self.config.sample_rate
-        )
-
-        # module to preprocess waveforms into log mel spectrograms
-        mel = torchaudio.transforms.MelSpectrogram(
-            sample_rate=config.sample_rate,
-            n_fft=config.n_fft,
-            win_length=config.window_length,
-            hop_length=config.hop_length,
-            n_mels=config.n_mels,
-            f_min=config.f_min,
-            f_max=config.f_max
-        )
-
-        freqm = torchaudio.transforms.FrequencyMasking(config.freqm, iid_masks=True)
-        timem = torchaudio.transforms.TimeMasking(config.timem, iid_masks=True)
+        # ... [initialize resample, mel, mel_teacher, freqm, timem as before] ...
 
         self.mel = torch.nn.Sequential(
-            resample,
-            mel
+            torchaudio.transforms.Resample(
+                orig_freq=self.config.orig_sample_rate,
+                new_freq=self.config.sample_rate
+            ),
+            torchaudio.transforms.MelSpectrogram(
+                sample_rate=config.sample_rate,
+                n_fft=config.n_fft,
+                win_length=config.window_length,
+                hop_length=config.hop_length,
+                n_mels=config.n_mels,
+                f_min=config.f_min,
+                f_max=config.f_max
+            )
+        )
+
+        self.mel_teacher = torch.nn.Sequential(
+            torchaudio.transforms.Resample(
+                orig_freq=self.config.orig_sample_rate,
+                new_freq=self.config.sample_rate
+            ),
+            torchaudio.transforms.MelSpectrogram(
+                sample_rate=32000,
+                n_fft=1024,
+                win_length=800,
+                hop_length=320,
+                n_mels=128,
+                f_min=0,
+                f_max=None
+            )
         )
 
         self.mel_augment = torch.nn.Sequential(
-            freqm,
-            timem
+            torchaudio.transforms.FrequencyMasking(self.config.freqm, iid_masks=True),
+            torchaudio.transforms.TimeMasking(self.config.timem, iid_masks=True)
         )
+        
+        self.model = CBAMCNN()  # Replace with your own model
 
-        # the baseline model
-        self.model = get_model(n_classes=config.n_classes,
-                               in_channels=config.in_channels,
-                               base_channels=config.base_channels,
-                               channels_multiplier=config.channels_multiplier,
-                               expansion_rate=config.expansion_rate
-                               )
+        if self.config.use_teacher:
+            from passt import get_model as get_passt_teacher
+            from cp_resnet import get_model as get_cp_resnet_teacher
+            
+            cp_resnet_net_config = self.model_config["net"].copy()
+            cp_resnet_net_config.pop("input_fdim", None)
+            cp_resnet_net_config.pop("s_patchout_t", None)
+            cp_resnet_net_config.pop("s_patchout_f", None)
+
+            self.teacher_model_1 = get_passt_teacher(**self.model_config["net"])
+            self.teacher_model_2 = get_cp_resnet_teacher(**cp_resnet_net_config)
+
+            self.teacher_model_1.load_state_dict(torch.load(self.config.teacher_checkpoint_1, map_location='cpu'))
+            self.teacher_model_2.load_state_dict(torch.load(self.config.teacher_checkpoint_2, map_location='cpu'))
+
+            self.teacher_model_1.eval()
+            for param in self.teacher_model_1.parameters():
+                param.requires_grad = False
+            self.teacher_model_2.eval()
+            for param in self.teacher_model_2.parameters():
+                param.requires_grad = False
+            print("Both Teachers Initiated!")
+            
+            # Initialize a dictionary to cache teacher logits per file.
+            self.teacher_logits_cache = {}
+        else:
+            self.teacher_model_1 = None
+            self.teacher_model_2 = None
+            print("No Teacher at all!")
 
         self.device_ids = ['a', 'b', 'c', 's1', 's2', 's3', 's4', 's5', 's6']
-        self.label_ids = ['airport', 'bus', 'metro', 'metro_station', 'park', 'public_square', 'shopping_mall',
-                          'street_pedestrian', 'street_traffic', 'tram']
-        # categorization of devices into 'real', 'seen' and 'unseen'
+        self.label_ids = ['airport', 'bus', 'metro', 'metro_station', 'park', 'public_square', 
+                          'shopping_mall', 'street_pedestrian', 'street_traffic', 'tram']
         self.device_groups = {'a': "real", 'b': "real", 'c': "real",
                               's1': "seen", 's2': "seen", 's3': "seen",
                               's4': "unseen", 's5': "unseen", 's6': "unseen"}
 
-        # pl 2 containers:
         self.training_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
 
     def mel_forward(self, x):
-        """
-        :param x: batch of raw audio signals (waveforms)
-        :return: log mel spectrogram
-        """
+        # Process the raw waveform to obtain the log mel spectrogram
         x = self.mel(x)
         if self.training:
             x = self.mel_augment(x)
@@ -86,60 +553,105 @@ class PLModule(pl.LightningModule):
         return x
 
     def forward(self, x):
-        """
-        :param x: batch of raw audio signals (waveforms)
-        :return: final model predictions
-        """
         x = self.mel_forward(x)
         x = self.model(x)
         return x
 
     def configure_optimizers(self):
-        """
-        This is the way pytorch lightening requires optimizers and learning rate schedulers to be defined.
-        The specified items are used automatically in the optimization loop (no need to call optimizer.step() yourself).
-        :return: optimizer and learning rate scheduler
-        """
-
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.config.lr, weight_decay=self.config.weight_decay)
         scheduler = transformers.get_cosine_schedule_with_warmup(
             optimizer,
             num_warmup_steps=self.config.warmup_steps,
             num_training_steps=self.trainer.estimated_stepping_batches,
         )
-
-        lr_scheduler_config = {
-            "scheduler": scheduler,
-            "interval": "step",
-            "frequency": 1
-        }
+        lr_scheduler_config = {"scheduler": scheduler, "interval": "step", "frequency": 1}
         return [optimizer], [lr_scheduler_config]
 
     def training_step(self, train_batch, batch_idx):
-        """
-        :param train_batch: contains one batch from train dataloader
-        :param batch_idx
-        :return: loss to update model parameters
-        """
-        x, files, labels, devices, cities = train_batch
-        labels = labels.type(torch.LongTensor)
-        labels = labels.to(self.device)
-        x = self.mel_forward(x)  # we convert the raw audio signals into log mel spectrograms
+        # Unpack the batch and also keep the raw audio for teacher computation.
+        raw_audio, files, labels, devices, cities = train_batch
+        labels = labels.type(torch.LongTensor).to(self.device)
+        
+        # --- Teacher Logits Caching ---
+        # Only compute teacher outputs if teachers are provided.
+        if self.teacher_model_1 is not None and self.teacher_model_2 is not None:
+            teacher_logits_list = [None] * len(files)
+            missing_indices = []
+            missing_files = []
+            
+            # Check for cached teacher logits for each file.
+            for i, file in enumerate(files):
+                if file in self.teacher_logits_cache:
+                    # Retrieve and move to the current device.
+                    teacher_logits_list[i] = self.teacher_logits_cache[file].to(self.device)
+                else:
+                    missing_indices.append(i)
+                    missing_files.append(file)
+            
+            if missing_indices:
+                # For missing entries, compute the teacher inputs using the dedicated teacher mel transform.
+                # Note: we use raw_audio (before any student-specific augmentation).
+                # Use fancy indexing to select the missing samples.
+                missing_raw = raw_audio[missing_indices]
+                x_teacher_missing = self.mel_teacher(missing_raw)
+                with torch.no_grad():
+                    teacher_logits_1 = self.teacher_model_1(x_teacher_missing)
+                    teacher_logits_2 = self.teacher_model_2(x_teacher_missing)
+                if isinstance(teacher_logits_1, tuple):
+                    teacher_logits_1 = teacher_logits_1[0]
+                if isinstance(teacher_logits_2, tuple):
+                    teacher_logits_2 = teacher_logits_2[0]
+                missing_teacher_logits = (teacher_logits_1 + teacher_logits_2) / 2.0
+                # Save computed logits in the cache and in our list.
+                for j, idx in enumerate(missing_indices):
+                    # Detach and move to CPU for caching.
+                    logit = missing_teacher_logits[j].detach().cpu()
+                    teacher_logits_list[idx] = logit.to(self.device)
+                    self.teacher_logits_cache[missing_files[j]] = logit
 
+            teacher_logits = torch.stack(teacher_logits_list, dim=0)
+        else:
+            teacher_logits = None
+
+        # --- Student Forward Pass ---
+        # Process raw_audio with the student mel transform (with augmentation if training).
+        x = self.mel_forward(raw_audio)
         if self.config.mixstyle_p > 0:
-            # frequency mixstyle
             x = mixstyle(x, self.config.mixstyle_p, self.config.mixstyle_alpha)
-        y_hat = self.model(x)
-        samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
-        loss = samples_loss.mean()
+        student_logits = self.model(x)
+        loss_ce = F.cross_entropy(student_logits, labels)
+
+        # If teacher logits were computed, use them for distillation loss.
+        if teacher_logits is not None:
+            T = self.config.temperature
+            soft_student = F.log_softmax(student_logits / T, dim=1)
+            soft_teacher = F.softmax(teacher_logits / T, dim=1)
+            loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
+            loss = self.config.distillation_alpha * loss_kd + (1 - self.config.distillation_alpha) * loss_ce
+            # Log both losses if desired.
+            self.log("soft_loss", loss_kd, on_step=True, on_epoch=True)
+        else:
+            loss = loss_ce
 
         self.log("lr", self.trainer.optimizers[0].param_groups[0]['lr'])
         self.log("epoch", self.current_epoch)
         self.log("train/loss", loss.detach().cpu())
+        self.log("hard_loss", loss_ce, on_step=True, on_epoch=True)
         return loss
 
     def on_train_epoch_end(self):
-        pass
+        # At the end of each epoch, save the teacher logits cache to an HDF5 file.
+        if self.config.use_teacher and hasattr(self, "teacher_logits_cache") and self.teacher_logits_cache:
+            file_name = f"teacher_logits_epoch_{self.current_epoch}.h5"
+            with h5py.File(file_name, "w") as hf:
+                for key, logits in self.teacher_logits_cache.items():
+                    # Save the cached logits as a NumPy array.
+                    hf.create_dataset(key, data=logits.numpy())
+            print(f"Teacher logits cache saved to {file_name}")
+
+    # ... [rest of your module: validation_step, on_validation_epoch_end, test_step, on_test_epoch_end, predict_step] ...
+
+
 
     def validation_step(self, val_batch, batch_idx):
         x, files, labels, devices, cities = val_batch
@@ -223,7 +735,10 @@ class PLModule(pl.LightningModule):
         # prefix with 'val' for logging
         self.log_dict({"val/" + k: logs[k] for k in logs})
         self.validation_step_outputs.clear()
-
+        
+    def on_test_epoch_start(self):
+        if not next(self.model.parameters()).dtype == torch.half:
+            self.model.half()
     def test_step(self, test_batch, batch_idx):
         x, files, labels, devices, cities = test_batch
         labels = labels.type(torch.LongTensor)
@@ -234,7 +749,7 @@ class PLModule(pl.LightningModule):
         # since 61148 * 16 bit ~ 122 kB
  
         # assure fp16
-        self.model.half()
+        
         x = self.mel_forward(x)
         x = x.half()
         y_hat = self.model(x)
@@ -325,111 +840,33 @@ class PLModule(pl.LightningModule):
         y_hat = self.model(x)
 
         return files, y_hat
-
-class BasicConv(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True, bn=True, bias=False):
-        super(BasicConv, self).__init__()
-        self.out_channels = out_planes
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
-        self.bn = nn.BatchNorm2d(out_planes,eps=1e-5, momentum=0.01, affine=True) if bn else None
-        self.relu = nn.ReLU() if relu else None
-
-    def forward(self, x):
-        x = self.conv(x)
-        if self.bn is not None:
-            x = self.bn(x)
-        if self.relu is not None:
-            x = self.relu(x)
-        return x
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(x.size(0), -1)
-
-class ChannelGate(nn.Module):
-    def __init__(self, gate_channels, reduction_ratio=16, pool_types=['avg', 'max']):
-        super(ChannelGate, self).__init__()
-        self.gate_channels = gate_channels
-        self.mlp = nn.Sequential(
-            Flatten(),
-            nn.Linear(gate_channels, int(gate_channels // reduction_ratio)),
-            nn.ReLU(),
-            nn.Linear(int(gate_channels // reduction_ratio), gate_channels)
-            )
-        self.pool_types = pool_types
-    def forward(self, x):
-        channel_att_sum = None
-        for pool_type in self.pool_types:
-            if pool_type=='avg':
-                avg_pool = F.avg_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( avg_pool )
-            elif pool_type=='max':
-                max_pool = F.max_pool2d( x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( max_pool )
-            elif pool_type=='lp':
-                lp_pool = F.lp_pool2d( x, 2, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp( lp_pool )
-            elif pool_type=='lse':
-                # LSE pool only
-                lse_pool = logsumexp_2d(x)
-                channel_att_raw = self.mlp( lse_pool )
-
-            if channel_att_sum is None:
-                channel_att_sum = channel_att_raw
-            else:
-                channel_att_sum = channel_att_sum + channel_att_raw
-
-        scale = F.sigmoid( channel_att_sum ).unsqueeze(2).unsqueeze(3).expand_as(x)
-        return x * scale
-
-def logsumexp_2d(tensor):
-    tensor_flatten = tensor.view(tensor.size(0), tensor.size(1), -1)
-    s, _ = torch.max(tensor_flatten, dim=2, keepdim=True)
-    outputs = s + (tensor_flatten - s).exp().sum(dim=2, keepdim=True).log()
-    return outputs
-
-class ChannelPool(nn.Module):
-    def forward(self, x):
-        return torch.cat( (torch.max(x,1)[0].unsqueeze(1), torch.mean(x,1).unsqueeze(1)), dim=1 )
-
-class SpatialGate(nn.Module):
-    def __init__(self):
-        super(SpatialGate, self).__init__()
-        kernel_size = 7
-        self.compress = ChannelPool()
-        self.spatial = BasicConv(2, 1, kernel_size, stride=1, padding=int((kernel_size-1) // 2), relu=False)
-    def forward(self, x):
-        x_compress = self.compress(x)
-        x_out = self.spatial(x_compress)
-        scale = F.sigmoid(x_out) # broadcasting
-        return x * scale
-
-class cbam_module(nn.Module):
-    def __init__(self, gate_channels, reduction=16, pool_types=['avg', 'max'], no_spatial=False):
-        super(cbam_module, self).__init__()
-        self.ChannelGate = ChannelGate(gate_channels, reduction, pool_types)
-        self.no_spatial=no_spatial
-        if not no_spatial:
-            self.SpatialGate = SpatialGate()
-
-    @staticmethod
-    def get_module_name():
-        return "cbam"
     
-    def forward(self, x):
-        x_out = self.ChannelGate(x)
-        if not self.no_spatial:
-            x_out = self.SpatialGate(x_out)
-        return x_out
-
+os.environ["WANDB_MODE"] = "online"
+    
 def train(config):
     # logging is done using wandb
+    config.use_precomputed_teacher_logits = True
     wandb_logger = WandbLogger(
         project=config.project_name,
         notes="Baseline System for DCASE'24 Task 1.",
         tags=["DCASE24"],
-        config=config,  # this logs all hyperparameters for us
+        config=vars(config),  # this logs all hyperparameters for us
         name=config.experiment_name
+    )
+    teacher_logits = torch.load(r"./teacher_logits_by_name.pt")
+    base_dataset = get_training_set(config.subset, roll=config.orig_sample_rate * config.roll_sec)
+
+    distillation_dataset = DistillationDataset(base_dataset, teacher_logits)
+
+    roll_samples = config.orig_sample_rate * config.roll_sec
+    train_dl = DataLoader(
+        dataset=get_training_set(config.subset, roll=roll_samples),
+        worker_init_fn=worker_init_fn,
+        num_workers=config.num_workers,
+        batch_size=config.batch_size,
+        shuffle=True,
+        pin_memory=True,  # Optimized for faster host-to-GPU transfer
+        persistent_workers=True if config.num_workers > 0 else False  # Reuse workers across epochs
     )
 
     # train dataloader
@@ -445,10 +882,14 @@ def train(config):
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
-                         batch_size=config.batch_size)
+                         batch_size=config.batch_size,        
+                         pin_memory=True,
+                         persistent_workers=True if config.num_workers > 0 else False
+)
 
+    
     # create pytorch lightening module
-    pl_module = PLModule(config)
+    pl_module = PLModule(config, model_config)
 
     # get model complexity from nessi and log results to wandb
     sample = next(iter(test_dl))[0][0].unsqueeze(0)
@@ -506,7 +947,10 @@ def evaluate(config):
     test_dl = DataLoader(dataset=get_test_set(),
                          worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
-                         batch_size=config.batch_size)
+                         batch_size=config.batch_size, 
+                         pin_memory=True,
+                         persistent_workers=True if config.num_workers > 0 else False
+    )
 
     # get model complexity from nessi
     sample = next(iter(test_dl))[0][0].unsqueeze(0).to(pl_module.device)
@@ -610,8 +1054,80 @@ if __name__ == '__main__':
     parser.add_argument('--f_min', type=int, default=0)  # mel bins are created for freqs. between 'f_min' and 'f_max'
     parser.add_argument('--f_max', type=int, default=None)
 
+    # Knowledge distillation arguments:
+    parser.add_argument('--use_teacher', action='store_true', help='Enable teacher model for knowledge distillation')
+    parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
+    parser.add_argument('--temperature', type=float, default=0.1) # Temperature for Knowledge Distillation
+    parser.add_argument('--distillation_alpha', type=float, default=0.1) # Loss weight for Knowledge Distillation
+    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfms_1.pt", 
+                    help='Path to the first teacher model checkpoint')
+    parser.add_argument('--teacher_checkpoint_2', type=str, default=r"./resources/cpr_128k_dirfms_1.pt", 
+                    help='Path to the second teacher model checkpoint')
+
+    
+    # Add other necessary arguments
     args = parser.parse_args()
+    from passt import get_model as get_passt
+    from cp_resnet import get_model as get_cp_resnet
+
+    # Define the model_config based on the model_name
+    if args.model_name in ["cpr_128k_dirfms_1",
+                           "cpr_128k_dirfms_2",
+                           "cpr_128k_dirfms_3",
+                           "cpr_128k_fms_1",
+                           "cpr_128k_fms_2",
+                           "cpr_128k_fms_3"]:
+        model_config = {
+            "mel": {
+                "sr": 32000,
+                "n_mels": 256,
+                "win_length": 3072,
+                "hopsize": 750,
+                "n_fft": 4096,
+                "fmax": None,
+                "fmax_aug_range": 1000,
+                "fmin": 0,
+                "fmin_aug_range": 1
+            },
+            "net": {
+                # "rho": 8,
+                # "base_channels": 32,
+                # "maxpool_stage1": [1],
+                # "maxpool_kernel": (2, 1),
+                # "maxpool_stride": (2, 1)
+            },
+            "model_fn": get_cp_resnet
+        }
+    if args.model_name in ["passt_dirfms_1", "passt_dirfms_2", "passt_dirfms_3", 
+                            "passt_fms_1", "passt_fms_2", "passt_fms_3"]:
+        model_config = {
+            "mel": {
+                "sr": 32000,
+                "n_mels": 128,
+                "win_length": 800,
+                "hopsize": 320,
+                "n_fft": 1024,
+                "fmax": None,
+                "fmax_aug_range": 1000,
+                "fmin": 0,
+                "fmin_aug_range": 1
+            },
+            "net": {
+                "arch": "passt_s_swa_p16_128_ap476",
+                "n_classes": 10,
+                "input_fdim": 128,
+                "s_patchout_t": 0,
+                "s_patchout_f": 6
+            },
+            "model_fn": get_passt  # This should be the function that creates the model.
+        }
+    else:
+        raise NotImplementedError(f"No model configuration for {args.model_name}")
+    args.use_teacher = True
+    teacher_checkpoints = [args.teacher_checkpoint_1, args.teacher_checkpoint_2]
+    
     if args.evaluate:
         evaluate(args)
     else:
         train(args)
+
