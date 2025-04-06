@@ -10,10 +10,6 @@ import wandb
 import json
 import torch.nn as nn
 import math
-import librosa
-import torch.nn as nn
-import matplotlib.pyplot as plt
-import torchaudio.transforms as T
 
 from dataset.dcase24 import get_training_set, get_test_set, get_eval_set
 from helpers.init import worker_init_fn
@@ -31,64 +27,6 @@ from thop import profile, clever_format
         #                        channels_multiplier=config.channels_multiplier,
         #                       expansion_rate=config.expansion_rate
         #                       )
-        
-# class FreqMixStyle(nn.Module):
-#     def __init__(self, alpha=0.2):
-#         super(FreqMixStyle, self).__init__()
-#         self.alpha = alpha
-
-#     def forward(self, x):
-#         print("Before mixing:", x.size())  # Printing before mixing
-#         if self.training:
-#             batch_size, channels, freq, time = x.size()
-#             weight = torch.randn((batch_size, 1, freq, 1), device=x.device) * self.alpha
-#             mixed_x = x + weight * x.mean(dim=2, keepdim=True)
-#             print("After mixing:", mixed_x.size())  # Printing after mixing
-
-#             return mixed_x
-#         else:
-#             return x
-# def forward(self, x):
-#     print("Input to model:", x.size())  # Check input size to the model
-#     x_mel = mel_transform(x)  # Some transformation
-#     print("After Mel transform:", x_mel.size())
-#     x_augmented = freq_mix_style(x_mel)  # Applying FreqMixStyle
-#     print("Output from FreqMixStyle:", x_augmented.size())  # Check output size from FreqMixStyle
-
-# def plot_spectrogram(spectrogram, title, ax):
-#     # Adjust this line if spectrogram is still 4D, expected shape (freq, time)
-#     spectrogram = spectrogram.squeeze().detach().numpy()
-#     im = ax.imshow(spectrogram, aspect='auto', origin='lower', cmap='viridis')
-#     ax.set_title(title)
-#     ax.set_xlabel('Time')
-#     ax.set_ylabel('Frequency')
-#     fig.colorbar(im, ax=ax)
-
-# def visualize_data_augmentation():
-#     x = torch.randn(1, 1, 256, 65)  # Simulated mono audio batch with shape [batch, channels, samples, width]
-#     mel_transform = T.MelSpectrogram(
-#         sample_rate=22050,
-#         n_fft=64, # Adjusted 2048
-#         win_length=64, # Ensure this is less than or equal to n_fft 1024
-#         hop_length=32, # Adjust based on your requirement 512
-#         n_mels=128,
-#         f_min=0,
-#         f_max=11025  # Using sample_rate / 2
-#     )
-#     freq_mix_style = FreqMixStyle(alpha=0.2)
-
-#     x_mel = mel_transform(x)  # Expected shape [batch, channel, mel_bins, time_steps]
-#     x_augmented = freq_mix_style(x_mel)
-
-#     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-#     plot_spectrogram(x_mel[0], 'Original Spectrogram', axes[0])
-#     plot_spectrogram(x_augmented[0], 'Augmented Spectrogram', axes[1])
-#     plt.tight_layout()
-#     plt.show()
-
-
-# visualize_data_augmentation()
-
 class ChannelAttention(nn.Module):
     """Channel Attention as proposed in the paper 'Convolutional Block Attention Module'"""
     def __init__(self, in_planes, ratio=16):
@@ -415,18 +353,18 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        self.attention1 = CBAMBlock(channels=16) # Replace w/ other Attention Modules if needed
+        self.attention1 = SpatialSELayerSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
                                kernel_size=(5,5), padding="same")
-        self.attention2 = CBAMBlock(channels=24) # Replace w/ other Attention Modules if needed
+        self.attention2 = SpatialSELayerSELayer(num_channels=24) # Replace w/ other Attention Modules if needed
         self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
                                kernel_size=(7,7), padding="same")
-        self.attention3 = CBAMBlock(channels=32) # Replace w/ other Attention Modules if needed
+        self.attention3 = SpatialSELayerSELayer(num_channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
         # Fully Connected Layers
@@ -450,7 +388,7 @@ class CBAMCNN(nn.Module):
         x = self.conv1(x)
         if self.verbose: 
             print("After conv1 : {}".format(x.shape))
-        x = self.attention1(x)
+        x = self.attention1(x) # Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
@@ -461,7 +399,7 @@ class CBAMCNN(nn.Module):
         x = self.conv2(x)
         if self.verbose:
             print("After conv2 : {}".format(x.shape))
-        x = self.attention2(x)
+        x = self.attention2(x)# Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
@@ -473,7 +411,7 @@ class CBAMCNN(nn.Module):
         x = self.conv3(x)
         if self.verbose: 
             print("After conv3 : {}".format(x.shape))
-        x = self.attention3(x)
+        x = self.attention3(x) # Comment out if dont want attention
         if self.verbose:
             print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
@@ -492,9 +430,10 @@ class CBAMCNN(nn.Module):
             print("Final X : {}".format(x.shape))
         
         return x
-    
 
-        
+
+
+
     
 if __name__ == "__main__":
     # Create a random tensor with shape (batch_size, channels, n_freqs, n_time)
@@ -534,23 +473,24 @@ class PLModule(pl.LightningModule):
         super().__init__()
         self.config = config  # results from argparse, contains all configurations for our experiment
         
-        # SpecAugment module initialization
-        # self.spec_augment = SpecAugment(freq_mask_param=15, time_mask_param=35, num_masks=2)
-        #self.freqmix = FreqMixStyle()
+        
+    # # SpecAugment module initialization
+    #     # self.spec_augment = SpecAugment(freq_mask_param=15, time_mask_param=35, num_masks=2)
+    #     self.freqmix = FreqMixStyle()
 
-        # # Other transformations
-        # self.resample = torchaudio.transforms.Resample(
-        #     orig_freq=config.orig_sample_rate, new_freq=config.sample_rate
-        # )
-        # self.mel = torchaudio.transforms.MelSpectrogram(
-        #     sample_rate=config.sample_rate,
-        #     n_fft=config.n_fft,
-        #     win_length=config.window_length,
-        #     hop_length=config.hop_length,
-        #     n_mels=config.n_mels,
-        #     f_min=config.f_min,
-        #     f_max=config.f_max
-        # )
+    #     # Other transformations
+    #     self.resample = torchaudio.transforms.Resample(
+    #         orig_freq=config.orig_sample_rate, new_freq=config.sample_rate
+    #     )
+    #     self.mel = torchaudio.transforms.MelSpectrogram(
+    #         sample_rate=config.sample_rate,
+    #         n_fft=config.n_fft,
+    #         win_length=config.window_length,
+    #         hop_length=config.hop_length,
+    #         n_mels=config.n_mels,
+    #         f_min=config.f_min,
+    #         f_max=config.f_max
+    #     )
 
         # module for resampling waveforms on the fly
         resample = torchaudio.transforms.Resample(
@@ -606,7 +546,7 @@ class PLModule(pl.LightningModule):
         if self.training:
             x = self.mel_augment(x)
             #x = self.freqmix(x)
-            x = (x + 1e-5).log()
+        x = (x + 1e-5).log()
         return x
 
     def forward(self, x):
@@ -866,13 +806,11 @@ def train(config):
                                                   "the given subsets."
     roll_samples = config.orig_sample_rate * config.roll_sec
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
-                          worker_init_fn=worker_init_fn,
                           num_workers=config.num_workers,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
-                         worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
@@ -894,13 +832,13 @@ def train(config):
                          accelerator='gpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
     # final test step
     # here: use the validation split
-    trainer.test(ckpt_path='last', dataloaders=test_dl)
+    trainer.test(ckpt_path='best', dataloaders=test_dl)
 
     wandb.finish()
 
