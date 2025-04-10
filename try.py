@@ -823,7 +823,7 @@ def train(config):
 
     
     # create pytorch lightening module
-    pl_module = PLModule(config, model_config)
+    pl_module = PLModule(config)
 
     # get model complexity from nessi and log results to wandb
     sample = next(iter(test_dl))[0][0].unsqueeze(0)
@@ -840,7 +840,7 @@ def train(config):
                          accelerator='cpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
