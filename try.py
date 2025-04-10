@@ -10,6 +10,11 @@ import wandb
 import json
 import torch.nn as nn
 import math
+import librosa
+import torch.nn as nn
+import matplotlib.pyplot as plt
+import torchaudio.transforms as T
+import os
 
 from dataset.dcase24 import get_training_set, get_test_set, get_eval_set
 from helpers.init import worker_init_fn
@@ -20,13 +25,7 @@ from thop import profile, clever_format
 
 
 
-        # the baseline model
-        #self.model = get_model(n_classes=config.n_classes,
-        #                       in_channels=config.in_channels,
-        #                       base_channels=config.base_channels,
-        #                        channels_multiplier=config.channels_multiplier,
-        #                       expansion_rate=config.expansion_rate
-        #                       )
+
 class ChannelAttention(nn.Module):
     """Channel Attention as proposed in the paper 'Convolutional Block Attention Module'"""
     def __init__(self, in_planes, ratio=16):
@@ -388,7 +387,7 @@ class CBAMCNN(nn.Module):
         x = self.conv1(x)
         if self.verbose: 
             print("After conv1 : {}".format(x.shape))
-        x = self.attention1(x) # Comment out if dont want attention
+        x = self.attention1(x)
         if self.verbose:
             print("After Attention Module 1 : {}".format(x.shape))
         x = self.maxpool1(x)
@@ -399,7 +398,7 @@ class CBAMCNN(nn.Module):
         x = self.conv2(x)
         if self.verbose:
             print("After conv2 : {}".format(x.shape))
-        x = self.attention2(x)# Comment out if dont want attention
+        x = self.attention2(x)
         if self.verbose:
             print("After Attention Module 2 : {}".format(x.shape))
         x = self.maxpool2(x)
@@ -411,7 +410,7 @@ class CBAMCNN(nn.Module):
         x = self.conv3(x)
         if self.verbose: 
             print("After conv3 : {}".format(x.shape))
-        x = self.attention3(x) # Comment out if dont want attention
+        x = self.attention3(x)
         if self.verbose:
             print("After Attention Module 3 : {}".format(x.shape))
         x = self.maxpool3(x)
@@ -432,37 +431,20 @@ class CBAMCNN(nn.Module):
         return x
 
 
-
-
-    
-if __name__ == "__main__":
-    # Create a random tensor with shape (batch_size, channels, n_freqs, n_time)
-    input_feature_shape = (1, 1, 256, 65)
-
-    # Initialize the model
-    model = CBAMCNN(verbose=True)
-
-    x = torch.rand((input_feature_shape), device=torch.device("cpu"))
-    y = model(x) # Forward pass
-
-    # Profiling model size and complexity
-    macs, params = profile(model, inputs=(torch.randn(input_feature_shape), ))
-    macs, params = clever_format([macs, params], "%.3f")
-    print("{} MACS and {} Params".format(macs, params))
-    print("Output shape : {}".format(y.shape))
-    
 class PLModule(pl.LightningModule):
-    def __init__(self, config):
+    def __init__(self, config, model_config):
         super().__init__()
-        self.config = config  # results from argparse, contains all configurations for our experiment
-        
-        
+        self.config = config
+        self.model_config = model_config
+
         # module for resampling waveforms on the fly
         resample = torchaudio.transforms.Resample(
             orig_freq=self.config.orig_sample_rate,
             new_freq=self.config.sample_rate
         )
-
+        get_model_fn = model_config['model_fn']
+        self.model = get_model_fn(**model_config["net"])
+        
         # module to preprocess waveforms into log mel spectrograms
         mel = torchaudio.transforms.MelSpectrogram(
             sample_rate=config.sample_rate,
@@ -473,6 +455,16 @@ class PLModule(pl.LightningModule):
             f_min=config.f_min,
             f_max=config.f_max
         )
+        
+        mel_teacher = torchaudio.transforms.MelSpectrogram(
+            sample_rate=32000,
+            n_fft=1024,
+            win_length=800,
+            hop_length=320,
+            n_mels=128,
+            f_min=0,
+            f_max=None
+        )
 
         freqm = torchaudio.transforms.FrequencyMasking(config.freqm, iid_masks=True)
         timem = torchaudio.transforms.TimeMasking(config.timem, iid_masks=True)
@@ -482,12 +474,35 @@ class PLModule(pl.LightningModule):
             mel
         )
 
+        self.mel_teacher = torch.nn.Sequential(
+            resample,
+            mel_teacher
+        )
+
         self.mel_augment = torch.nn.Sequential(
             freqm,
             timem
         )
         self.model = CBAMCNN()  # Replace with own model #TODO 
 
+
+        if self.config.use_teacher:
+            # Here we assume that the teacher model has the same architecture as used during teacher training.
+            # For instance, if you're using a PaSST teacher, import the teacher model definition:
+            from passt import get_model as get_passt_teacher
+            # Instantiate the teacher model with appropriate parameters:
+            self.teacher_model = get_passt_teacher(**self.model_config["net"])
+            # Load the pre-trained teacher weights:
+            self.teacher_model.load_state_dict(torch.load(self.config.teacher_checkpoint, map_location='cpu'))
+            # Set the teacher to evaluation mode and freeze its parameters:
+            self.teacher_model.eval()
+            for param in self.teacher_model.parameters():
+                param.requires_grad = False
+            print("Teacher Initiated!")
+        else:
+            self.teacher_model = None
+            print("No Teacher at all!")
+            
         self.device_ids = ['a', 'b', 'c', 's1', 's2', 's3', 's4', 's5', 's6']
         self.label_ids = ['airport', 'bus', 'metro', 'metro_station', 'park', 'public_square', 'shopping_mall',
                           'street_pedestrian', 'street_traffic', 'tram']
@@ -506,10 +521,14 @@ class PLModule(pl.LightningModule):
         :param x: batch of raw audio signals (waveforms)
         :return: log mel spectrogram
         """
-        x = self.mel(x)
-        if self.training:
-            x = self.mel_augment(x)
+        x = self.mel(x) # Convert raw waveform into spectrogram
+
+        if self.training: # IF training, we want to apply augmentations
+            x = self.mel_augment(x) # Apply augmentations to the mel spec
+            #x = self.freqmix(x)
         x = (x + 1e-5).log()
+        print("X mel : {}".format(x.shape))
+    
         return x
 
     def forward(self, x):
@@ -518,7 +537,6 @@ class PLModule(pl.LightningModule):
         :return: final model predictions
         """
         x = self.mel_forward(x)
-        #print("Input shape: {}".format(x.shape))
         x = self.model(x)
         return x
 
@@ -552,18 +570,40 @@ class PLModule(pl.LightningModule):
         x, files, labels, devices, cities = train_batch
         labels = labels.type(torch.LongTensor)
         labels = labels.to(self.device)
+        x_teacher = self.mel_teacher(x) # Convert raw audio into MelSpec for Teacher Model
         x = self.mel_forward(x)  # we convert the raw audio signals into log mel spectrograms
 
         if self.config.mixstyle_p > 0:
             # frequency mixstyle
             x = mixstyle(x, self.config.mixstyle_p, self.config.mixstyle_alpha)
-        y_hat = self.model(x)
-        samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
-        loss = samples_loss.mean()
+
+        # Student model forward pass
+        student_logits = self.model(x)
+        loss_ce = F.cross_entropy(student_logits, labels)
+        
+        # If a teacher model is provided, compute the distillation loss.
+        if self.teacher_model is not None:
+            # Use no_grad to ensure teacher is not updated.
+            with torch.no_grad():
+                teacher_logits = self.teacher_model(x_teacher)
+            T = self.config.temperature  # temperature for softening
+            # Compute softened probabilities
+            soft_student = F.log_softmax(student_logits / T, dim=1)
+            print("Student: {}, Teacher: {}".format(student_logits.shape, teacher_logits[0].shape))
+            soft_teacher = F.softmax(teacher_logits[0] / T, dim=1)
+            loss_kd = F.kl_div(soft_student, soft_teacher, reduction="batchmean") * (T * T)
+            # Combine the losses: distillation loss and standard cross-entropy loss
+            loss = self.config.distillation_alpha * loss_kd + (1 - self.config.distillation_alpha) * loss_ce
+        else:
+            loss = loss_ce
 
         self.log("lr", self.trainer.optimizers[0].param_groups[0]['lr'])
         self.log("epoch", self.current_epoch)
         self.log("train/loss", loss.detach().cpu())
+        self.log("epoch", self.current_epoch)
+        self.log("hard_loss", loss_ce, on_step=True, on_epoch=True)
+        self.log("soft_loss", loss_kd, on_step=True, on_epoch=True)
+
         return loss
 
     def on_train_epoch_end(self):
@@ -754,13 +794,15 @@ class PLModule(pl.LightningModule):
 
         return files, y_hat
     
+os.environ["WANDB_MODE"] = "online"
+    
 def train(config):
     # logging is done using wandb
     wandb_logger = WandbLogger(
         project=config.project_name,
         notes="Baseline System for DCASE'24 Task 1.",
         tags=["DCASE24"],
-        config=config,  # this logs all hyperparameters for us
+        config=vars(config),  # this logs all hyperparameters for us
         name=config.experiment_name
     )
 
@@ -769,16 +811,19 @@ def train(config):
                                                   "the given subsets."
     roll_samples = config.orig_sample_rate * config.roll_sec
     train_dl = DataLoader(dataset=get_training_set(config.subset, roll=roll_samples),
+                          worker_init_fn=worker_init_fn,
                           num_workers=config.num_workers,
                           batch_size=config.batch_size,
                           shuffle=True)
 
     test_dl = DataLoader(dataset=get_test_set(),
+                         worker_init_fn=worker_init_fn,
                          num_workers=config.num_workers,
                          batch_size=config.batch_size)
 
+    
     # create pytorch lightening module
-    pl_module = PLModule(config)
+    pl_module = PLModule(config, model_config)
 
     # get model complexity from nessi and log results to wandb
     sample = next(iter(test_dl))[0][0].unsqueeze(0)
@@ -792,16 +837,16 @@ def train(config):
     # on which kind of device(s) to train and possible callbacks
     trainer = pl.Trainer(max_epochs=config.n_epochs,
                          logger=wandb_logger,
-                         accelerator='gpu',
+                         accelerator='cpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
     # final test step
     # here: use the validation split
-    trainer.test(ckpt_path='best', dataloaders=test_dl)
+    trainer.test(ckpt_path='last', dataloaders=test_dl)
 
     wandb.finish()
 
@@ -940,7 +985,45 @@ if __name__ == '__main__':
     parser.add_argument('--f_min', type=int, default=0)  # mel bins are created for freqs. between 'f_min' and 'f_max'
     parser.add_argument('--f_max', type=int, default=None)
 
+    # Knowledge distillation arguments:
+    parser.add_argument('--use_teacher', action='store_true', help='Enable teacher model for knowledge distillation')
+    parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
+    parser.add_argument('--temperature', type=float, default=2) # Temperature for Knowledge Distillation
+    parser.add_argument('--distillation_alpha', type=float, default=0.02) # Loss weight for Knowledge Distillation
+    
+    # Add other necessary arguments
     args = parser.parse_args()
+    from passt import get_model as get_passt
+
+    # Define the model_config based on the model_name
+    if args.model_name in ["passt_dirfms_1", "passt_dirfms_2", "passt_dirfms_3", 
+                            "passt_fms_1", "passt_fms_2", "passt_fms_3"]:
+        model_config = {
+            "mel": {
+                "sr": 32000,
+                "n_mels": 128,
+                "win_length": 800,
+                "hopsize": 320,
+                "n_fft": 1024,
+                "fmax": None,
+                "fmax_aug_range": 1000,
+                "fmin": 0,
+                "fmin_aug_range": 1
+            },
+            "net": {
+                "arch": "passt_s_swa_p16_128_ap476",
+                "n_classes": 10,
+                "input_fdim": 128,
+                "s_patchout_t": 0,
+                "s_patchout_f": 6
+            },
+            "model_fn": get_passt  # This should be the function that creates the model.
+        }
+    else:
+        raise NotImplementedError(f"No model configuration for {args.model_name}")
+    args.use_teacher = True
+    args.teacher_checkpoint = r"./resources/passt_dirfms_1.pt"
+    
     if args.evaluate:
         evaluate(args)
     else:
