@@ -594,6 +594,7 @@ class PLModule(pl.LightningModule):
         if self.config.mixstyle_p > 0:
             # frequency mixstyle
             #x = mixstyle(x, self.config.mixstyle_p, self.config.mixstyle_alpha)
+            pass
         y_hat = self.model(x)
         samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
         loss = samples_loss.mean()
