@@ -780,6 +780,17 @@ def train(config):
     # create pytorch lightening module
     pl_module = PLModule(config)
 
+    from pytorch_lightning.callbacks import ModelCheckpoint
+ 
+    # Create a checkpoint callback to monitor validation accuracy
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val/acc",  # Make sure your on_validation_epoch_end logs "val/acc"
+        mode="max",         # "max" because higher accuracy is better
+        save_top_k=1,       # Save only the best model
+        verbose=True,
+        filename="{epoch}-{val/acc:.3f}"  # Optional: customize the filename
+    )
+
     # get model complexity from nessi and log results to wandb
     sample = next(iter(test_dl))[0][0].unsqueeze(0)
     shape = pl_module.mel_forward(sample).size()
@@ -795,7 +806,7 @@ def train(config):
                          accelerator='gpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
+                         callbacks=[checkpoint_callback])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
