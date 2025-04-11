@@ -353,18 +353,18 @@ class CBAMCNN(nn.Module):
         # Here I am defining the model layers in sequential order (i.e. the order I will pass my input through)
 
         self.conv1 = ConvBlock(in_channels=1, out_channels=16)
-        self.attention1 = ChannelSpatialSELayer(num_channels=16) # Replace w/ other Attention Modules if needed
+        self.attention1 = CBAMBlock(channels=16) # Replace w/ other Attention Modules if needed
         self.maxpool1 = nn.MaxPool2d((4,4))
 
         self.conv2 = ConvBlock(in_channels=16, out_channels=24,
                                kernel_size=(5,5), padding="same")
-        self.attention2 = ChannelSpatialSELayer(num_channels=24) # Replace w/ other Attention Modules if needed
+        self.attention2 = CBAMBlock(channels=24) # Replace w/ other Attention Modules if needed
         self.maxpool2 = nn.MaxPool2d((2,4))
         self.dropout1 = nn.Dropout(p=0.2)
         
         self.conv3 = ConvBlock(in_channels=24, out_channels=32,
                                kernel_size=(7,7), padding="same")
-        self.attention3 = ChannelSpatialSELayer(num_channels=32) # Replace w/ other Attention Modules if needed
+        self.attention3 = CBAMBlock(channels=32) # Replace w/ other Attention Modules if needed
         self.maxpool3 = nn.MaxPool2d((2,4))
         
         # Fully Connected Layers
@@ -451,19 +451,19 @@ if __name__ == "__main__":
     print("{} MACS and {} Params".format(macs, params))
     print("Output shape : {}".format(y.shape))
     
-class FreqMixStyle(torch.nn.Module):
+class FreqMixStyle(nn.Module):
     def __init__(self, alpha=0.2):
         super(FreqMixStyle, self).__init__()
         self.alpha = alpha
 
     def forward(self, x):
-        # If in training mode, augment the input with frequency mixing.
+        # print("Before mixing:", x.size())  # Printing before mixing
         if self.training:
             batch_size, channels, freq, time = x.size()
-            # Generate noise with shape (batch_size, 1, freq, 1)
             weight = torch.randn((batch_size, 1, freq, 1), device=x.device) * self.alpha
-            # Compute per-sample mean over the frequency dimension and add the weighted mean.
             mixed_x = x + weight * x.mean(dim=2, keepdim=True)
+            # print("After mixing:", mixed_x.size())  # Printing after mixing
+
             return mixed_x
         else:
             return x
@@ -476,7 +476,7 @@ class PLModule(pl.LightningModule):
         
     # SpecAugment module initialization
         # self.spec_augment = SpecAugment(freq_mask_param=15, time_mask_param=35, num_masks=2)
-        self.freqmix = FreqMixStyle(alpha=0.2)
+        self.freqmix = FreqMixStyle()
 
         # Other transformations
         self.resample = torchaudio.transforms.Resample(
@@ -545,7 +545,7 @@ class PLModule(pl.LightningModule):
         # print("X mel : {}".format(x.shape))
         if self.training:
             x = self.mel_augment(x)
-            x = self.freqmix(x)
+            #x = self.freqmix(x)
         x = (x + 1e-5).log()
         return x
 
@@ -593,8 +593,7 @@ class PLModule(pl.LightningModule):
 
         if self.config.mixstyle_p > 0:
             # frequency mixstyle
-            #x = mixstyle(x, self.config.mixstyle_p, self.config.mixstyle_alpha)
-            pass
+            x = mixstyle(x, self.config.mixstyle_p, self.config.mixstyle_alpha)
         y_hat = self.model(x)
         samples_loss = F.cross_entropy(y_hat, labels, reduction="none")
         loss = samples_loss.mean()
@@ -833,7 +832,7 @@ def train(config):
                          accelerator='gpu',
                          devices=1,
                          precision=config.precision,
-                         callbacks=[pl.callbacks.ModelCheckpoint(save_last=True, monitor = "val/loss",save_top_k=1)])
+                         callbacks=[pl.callbacks.ModelCheckpoint(save_best=True, monitor = "val/loss",save_top_k=1)])
     # start training and validation for the specified number of epochs
     trainer.fit(pl_module, train_dl, test_dl)
 
