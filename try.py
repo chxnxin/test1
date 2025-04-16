@@ -459,23 +459,6 @@ import torchaudio
 import transformers
 import h5py  # for saving teacher logits in HDF5 format
 
-class FreqMixStyle(nn.Module):
-    def __init__(self, alpha=0.2):
-        super(FreqMixStyle, self).__init__()
-        self.alpha = alpha
-
-    def forward(self, x):
-        # print("Before mixing:", x.size())  # Printing before mixing
-        if self.training:
-            batch_size, channels, freq, time = x.size()
-            weight = torch.randn((batch_size, 1, freq, 1), device=x.device) * self.alpha
-            mixed_x = x + weight * x.mean(dim=2, keepdim=True)
-            # print("After mixing:", mixed_x.size())  # Printing after mixing
-
-            return mixed_x
-        else:
-            return x
-
 class PLModule(pl.LightningModule):
     def __init__(self, config, model_config):
         super().__init__()
@@ -1127,7 +1110,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_name', type=str, default='passt_dirfms_1', help='Path to the teacher model checkpoint')
     parser.add_argument('--temperature', type=float, default=0.1) # Temperature for Knowledge Distillation
     parser.add_argument('--distillation_alpha', type=float, default=0.1) # Loss weight for Knowledge Distillation
-    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfms_1.pt",
+    parser.add_argument('--teacher_checkpoint_1', type=str, default=r"./resources/passt_dirfms_1.pt", 
                     help='Path to the first teacher model checkpoint')
     parser.add_argument('--teacher_checkpoint_2', type=str, default=r"./resources/cpr_128k_dirfms_1.pt", 
                     help='Path to the second teacher model checkpoint')
@@ -1198,3 +1181,4 @@ if __name__ == '__main__':
         evaluate(args)
     else:
         train(args)
+
